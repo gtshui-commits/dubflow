@@ -321,7 +321,7 @@ function App() {
           </tbody>
         </table>
         <p className="muted" style={{ marginBottom: 0 }}>
-          mlx = MacBook Metal GPU；ctranslate2 = Windows/Linux（N卡 CUDA / CPU 兜底，TODO）；whisper.cpp Vulkan（A卡）规划中。
+          下载源自动优先 ModelScope（国内直连）→ HF 镜像。mlx = MacBook Metal GPU；ctranslate2 = Windows/Linux（N卡 CUDA / CPU 兜底，TODO）；whisper.cpp Vulkan（A卡）规划中。
         </p>
       </div>
     </>

@@ -18,25 +18,41 @@ import httpx
 from .config import settings
 
 # ---------------------------------------------------------------------------
-# Model catalog: key -> (backend, hf_repo)
-# backend "mlx"          -> Apple Silicon (macOS), files land in models_dir/<key>/
-# backend "ctranslate2"  -> faster-whisper (NVIDIA CUDA / CPU), TODO(platform): verify on real GPU
-# NOTE: mlx-community/whisper-base & whisper-small excluded for now - the CN
-# mirror currently 401s their API/resolve endpoints. TODO: restore via fallback.
+# Model catalog. Each entry has a SOURCE CHAIN, tried in order:
+#   modelscope -> 国内直连，最稳（mlx-community / Systran 官方命名空间原生同步）
+#   hf-mirror  -> HF_ENDPOINT 指向的镜像（默认 hf-mirror.com）
+# backend "mlx"         -> Apple Silicon (macOS)
+# backend "ctranslate2" -> faster-whisper (NVIDIA CUDA / CPU), TODO(platform): 真机验证
 # ---------------------------------------------------------------------------
 _MLX_FILES = ["config.json", "weights.npz"]
 _CT2_FILES = ["config.json", "model.bin", "tokenizer.json", "preprocessor_config.json", "vocabulary.json"]
 
+def _ms(repo: str) -> tuple:
+    return ("modelscope", repo)
+
+def _hfm(repo: str) -> tuple:
+    return ("hf-mirror", repo)
+
 CATALOG: Dict[str, Dict[str, Any]] = {
-    "tiny":                    {"backend": "mlx", "repo": "mlx-community/whisper-tiny", "files": _MLX_FILES},
-    "medium":                  {"backend": "mlx", "repo": "mlx-community/whisper-medium-4bit", "files": _MLX_FILES},
-    "large-v3":                {"backend": "mlx", "repo": "mlx-community/whisper-large-v3-4bit", "files": _MLX_FILES},
-    "large-v3-turbo":          {"backend": "mlx", "repo": "mlx-community/whisper-large-v3-turbo", "files": ["config.json", "weights.safetensors"]},
-    "large-v3-turbo-q4":       {"backend": "mlx", "repo": "mlx-community/whisper-large-v3-turbo-q4", "files": _MLX_FILES},
-    "faster-whisper-tiny":     {"backend": "ctranslate2", "repo": "Systran/faster-whisper-tiny", "files": _CT2_FILES},
-    "faster-whisper-base":     {"backend": "ctranslate2", "repo": "Systran/faster-whisper-base", "files": _CT2_FILES},
-    "faster-whisper-large-v3": {"backend": "ctranslate2", "repo": "Systran/faster-whisper-large-v3", "files": _CT2_FILES},
+    "tiny":               {"backend": "mlx", "files": _MLX_FILES,
+                           "sources": [_ms("mlx-community/whisper-tiny-mlx"), _hfm("mlx-community/whisper-tiny")]},
+    "medium":             {"backend": "mlx", "files": _MLX_FILES,
+                           "sources": [_ms("mlx-community/whisper-medium-4bit"), _hfm("mlx-community/whisper-medium-4bit")]},
+    "large-v3":           {"backend": "mlx", "files": _MLX_FILES,
+                           "sources": [_ms("mlx-community/whisper-large-v3-4bit"), _hfm("mlx-community/whisper-large-v3-4bit")]},
+    "large-v3-turbo":     {"backend": "mlx", "files": ["config.json", "weights.safetensors"],
+                           "sources": [_ms("mlx-community/whisper-large-v3-turbo"), _hfm("mlx-community/whisper-large-v3-turbo")]},
+    "large-v3-turbo-q4":  {"backend": "mlx", "files": _MLX_FILES,
+                           "sources": [_ms("mlx-community/whisper-large-v3-turbo-4bit"), _hfm("mlx-community/whisper-large-v3-turbo-q4")]},
+    "faster-whisper-tiny":     {"backend": "ctranslate2", "files": _CT2_FILES,
+                                "sources": [_ms("Systran/faster-whisper-tiny"), _hfm("Systran/faster-whisper-tiny")]},
+    "faster-whisper-base":     {"backend": "ctranslate2", "files": _CT2_FILES,
+                                "sources": [_ms("Systran/faster-whisper-base"), _hfm("Systran/faster-whisper-base")]},
+    "faster-whisper-large-v3": {"backend": "ctranslate2", "files": _CT2_FILES,
+                                "sources": [_ms("Systran/faster-whisper-large-v3"), _hfm("Systran/faster-whisper-large-v3")]},
 }
+
+_SKIP_FILES = {"README.md", "configuration.json", ".gitattributes"}
 
 _BIN_DIR = Path(__file__).resolve().parents[2] / "bin"
 _state_lock = threading.Lock()
@@ -86,7 +102,8 @@ def ffmpeg_status() -> dict:
 def downloads_snapshot() -> dict:
     models = []
     for key in CATALOG:
-        backend, repo = CATALOG[key]["backend"], CATALOG[key]["repo"]
+        backend = CATALOG[key]["backend"]
+        repo = CATALOG[key]["sources"][0][1]
         d = _existing_model_dir(key, repo)
         has_weights = False
         size = 0
@@ -107,25 +124,56 @@ def downloads_snapshot() -> dict:
 # model downloads (HF files via configured mirror endpoint)
 # ---------------------------------------------------------------------------
 
-def _download_model_sync(key: str, repo: str, fallback_files: list) -> None:
+def _list_source_files(source: tuple, client: httpx.Client) -> list:
+    """Return [(path, size)] for a source, or raise. Filter metadata files."""
+    source_type, repo = source
+    if source_type == "modelscope":
+        url = f"https://modelscope.cn/api/v1/models/{repo}/repo/files?Revision=master&Recursive=true"
+        r = client.get(url)
+        if r.status_code != 200:
+            raise RuntimeError(f"modelscope list {r.status_code}")
+        data = r.json().get("Data", {}).get("Files", []) or []
+        files = [(f["Path"], f.get("Size") or 0) for f in data if f.get("Type") == "blob"]
+    else:  # hf-mirror / hf
+        endpoint = settings.hf_endpoint.rstrip("/")
+        r = client.get(f"{endpoint}/api/models/{repo}/tree/main")
+        if r.status_code != 200:
+            raise RuntimeError(f"hf list {r.status_code}")
+        files = [(f["path"], f.get("size") or 0) for f in r.json()
+                 if f.get("type") == "file"]
+
+    files = [(p, s) for p, s in files
+             if not p.startswith(".") and p not in _SKIP_FILES]
+    if not files:
+        raise RuntimeError("empty file list")
+    return files
+
+
+def _source_file_url(source: tuple, path: str) -> str:
+    source_type, repo = source
+    if source_type == "modelscope":
+        from urllib.parse import quote
+        return (f"https://modelscope.cn/api/v1/models/{repo}/repo"
+                f"?Revision=master&FilePath={quote(path)}")
     endpoint = settings.hf_endpoint.rstrip("/")
+    return f"{endpoint}/{repo}/resolve/main/{path}"
+
+
+def _download_model_sync(key: str, entry: Dict[str, Any]) -> None:
     dest = _model_dir(key)
     dest.mkdir(parents=True, exist_ok=True)
-    with httpx.Client(timeout=120, trust_env=True) as client:
-        # try tree API for file list + sizes; on redirect/404 fall back to a
-        # hardcoded list (some mirrors don't proxy the API for every repo)
-        files = []
-        try:
-            r = client.get(f"{endpoint}/api/models/{repo}/tree/main")
-            if r.status_code == 200:
-                files = [(f["path"], f["size"]) for f in r.json()
-                         if f.get("type") == "file"
-                         and not f["path"].startswith(".")
-                         and f["path"] not in ("README.md",)]
-        except Exception:
-            files = []
-        if not files:
-            files = [(p, 0) for p in fallback_files]
+    files, used = None, None
+    with httpx.Client(timeout=120, trust_env=True, follow_redirects=True) as client:
+        for source in entry["sources"]:
+            try:
+                files = _list_source_files(source, client)
+                used = source
+                break
+            except Exception as e:  # noqa: BLE001
+                _set(f"model:{key}", detail=f"source {source[0]} unavailable: {e}")
+        if not files or used is None:
+            raise RuntimeError("all download sources failed (file list)")
+
         known = all(s > 0 for _, s in files)
         total = sum(s for _, s in files)
         done_bytes = 0
@@ -134,9 +182,9 @@ def _download_model_sync(key: str, repo: str, fallback_files: list) -> None:
             out = dest / path
             out.parent.mkdir(parents=True, exist_ok=True)
             tmp = out.with_name(out.name + ".part")
-            url = f"{endpoint}/{repo}/resolve/main/{path}"
+            url = _source_file_url(used, path)
             try:
-                with client.stream("GET", url, follow_redirects=True) as r:
+                with client.stream("GET", url) as r:
                     if r.status_code == 404:
                         done_files += 1
                         continue
@@ -149,10 +197,10 @@ def _download_model_sync(key: str, repo: str, fallback_files: list) -> None:
                 if tmp.exists():
                     tmp.rename(out)
                 done_files += 1
-            prog = (done_bytes / total) if known else (done_files / len(files))
+            prog = (done_bytes / total) if known and total else (done_files / len(files))
             _set(f"model:{key}", progress=round(min(prog, 1.0), 4),
-                 detail=f"{path} ({done_files}/{len(files)})")
-    _set(f"model:{key}", status="done", progress=1.0, detail="completed")
+                 detail=f"[{used[0]}] {path} ({done_files}/{len(files)})")
+    _set(f"model:{key}", status="done", progress=1.0, detail=f"completed via {used[0]}")
 
 
 def _worker(state_key: str, fn, *args) -> None:
@@ -172,7 +220,7 @@ def start_model_download(key: str) -> dict:
     entry = CATALOG[key]
     threading.Thread(
         target=_worker,
-        args=(f"model:{key}", _download_model_sync, key, entry["repo"], entry["files"]),
+        args=(f"model:{key}", _download_model_sync, key, entry),
         daemon=True).start()
     return {"ok": True}
 
