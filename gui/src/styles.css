@@ -1,0 +1,53 @@
+:root {
+  color-scheme: dark;
+  --bg: #16181d;
+  --panel: #1e2127;
+  --border: #2d313a;
+  --text: #e6e8ec;
+  --muted: #8b909b;
+  --accent: #4f8cff;
+  --ok: #3fb970;
+  --err: #e5534b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+#root { max-width: 960px; margin: 0 auto; padding: 24px 20px 60px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 14px; margin: 24px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+input, select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 10px; font-size: 13px;
+}
+input[type="text"] { flex: 1; min-width: 220px; }
+button {
+  background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+  padding: 8px 16px; font-size: 13px; cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; }
+.badge.ok { background: rgba(63,185,112,.15); color: var(--ok); }
+.badge.err { background: rgba(229,83,75,.15); color: var(--err); }
+.muted { color: var(--muted); }
+.job { border-bottom: 1px solid var(--border); padding: 12px 0; }
+.job:last-child { border-bottom: 0; }
+.job .file { font-weight: 600; margin-bottom: 6px; word-break: break-all; }
+.steps { display: flex; gap: 6px; flex-wrap: wrap; }
+.step { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font-size: 12px; }
+.step.done { border-color: var(--ok); color: var(--ok); }
+.step.running { border-color: var(--accent); color: var(--accent); }
+.step.failed { border-color: var(--err); color: var(--err); }
+.step.skipped { opacity: 0.45; }
+.bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); transition: width .3s; }
+.error { color: var(--err); margin-top: 6px; word-break: break-all; }
+table { width: 100%; border-collapse: collapse; }
+td, th { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; }
