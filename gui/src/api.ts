@@ -67,6 +67,11 @@ export const api = {
       region?: string;
       model?: string;
     };
+    export: {
+      variant: string;
+      save_to_video_folder: boolean;
+      embed_video: boolean;
+    };
   }) => req<Job>("POST", "/jobs", payload),
   getTranscript: (id: string) =>
     req<{ language: string | null; segments: Segment[] }>(

@@ -18,6 +18,9 @@ function App() {
   const [model, setModel] = useState("large-v3-turbo");
   const [translate, setTranslate] = useState(false);
   const [trProvider, setTrProvider] = useState("llm");
+  const [subtitleVariant, setSubtitleVariant] = useState("bilingual");
+  const [saveSrt, setSaveSrt] = useState(true);
+  const [embedVideo, setEmbedVideo] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [msftKey, setMsftKey] = useState("");
   const [msftRegion, setMsftRegion] = useState("global");
@@ -54,11 +57,16 @@ function App() {
           region: trProvider === "microsoft" ? (msftRegion || undefined) : undefined,
           model: trProvider === "llm" ? (apiModel || undefined) : undefined,
         },
+        export: {
+          variant: subtitleVariant,
+          save_to_video_folder: saveSrt || embedVideo,
+          embed_video: embedVideo,
+        },
       });
     } catch (e) {
       setError(String(e));
     }
-  }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion]);
+  }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion, subtitleVariant, saveSrt, embedVideo]);
 
   const showTranscript = useCallback(async (id: string) => {
     try {
@@ -157,6 +165,35 @@ function App() {
         {translate && trProvider === "google" && (
           <div className="muted" style={{ marginTop: 8 }}>谷歌免费接口，经系统代理访问，无需 key。</div>
         )}
+        <div className="row" style={{ marginTop: 10 }}>
+          <label className="muted">字幕类型</label>
+          <select value={subtitleVariant} onChange={(e) => setSubtitleVariant(e.target.value)}>
+            <option value="bilingual">双语对照</option>
+            <option value="target">仅译文</option>
+            <option value="source">仅原文</option>
+          </select>
+          <label className="row" style={{ gap: 4 }}>
+            <input
+              type="checkbox"
+              style={{ width: "auto" }}
+              checked={saveSrt}
+              onChange={(e) => setSaveSrt(e.target.checked)}
+            />
+            <span className="muted">保存字幕到视频文件夹</span>
+          </label>
+          <label className="row" style={{ gap: 4 }}>
+            <input
+              type="checkbox"
+              style={{ width: "auto" }}
+              checked={embedVideo}
+              onChange={(e) => {
+                setEmbedVideo(e.target.checked);
+                if (e.target.checked) setSaveSrt(true);
+              }}
+            />
+            <span className="muted">嵌入字幕生成新视频</span>
+          </label>
+        </div>
         <div className="row" style={{ marginTop: 12 }}>
           <button disabled={!videoPath.trim() || !health} onClick={submit}>
             开始处理

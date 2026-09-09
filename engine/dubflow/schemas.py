@@ -19,9 +19,16 @@ class TranslationOptions(BaseModel):
     model: Optional[str] = None     # llm only
 
 
+class ExportOptions(BaseModel):
+    variant: str = "bilingual"      # source | target | bilingual  (三选一)
+    save_to_video_folder: bool = True   # 交付方式一：字幕存到原视频所在文件夹
+    embed_video: bool = False           # 交付方式二：同时嵌入字幕生成新视频
+
+
 class JobCreate(BaseModel):
     video_path: str
     source_language: Optional[str] = None   # None = auto detect
     target_language: str = "zh"
     asr: ASROptions = ASROptions()
     translation: TranslationOptions = TranslationOptions()
+    export: ExportOptions = ExportOptions()

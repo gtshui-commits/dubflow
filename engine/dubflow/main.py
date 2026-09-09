@@ -48,6 +48,8 @@ async def create_job(req: JobCreate) -> dict:
     from pathlib import Path
     if not Path(req.video_path).is_file():
         raise HTTPException(status_code=400, detail=f"video not found: {req.video_path}")
+    if not req.translation.enabled and req.export.variant != "source":
+        raise HTTPException(status_code=400, detail="该字幕类型需要开启翻译")
     job = manager.create(req)
     manager.start(job)
     return job.out()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -12,7 +13,7 @@ from typing import Any, Dict, List, Optional, Set
 from .asr import select_provider
 from .asr.base import Transcript
 from .config import settings
-from .ffmpeg_tools import extract_audio, probe
+from .ffmpeg_tools import embed_subtitle, extract_audio, probe
 from .schemas import JobCreate
 from .subtitles import to_srt
 from .translator import build_translator
@@ -37,6 +38,7 @@ class Job:
     target_language: str
     asr_options: Dict[str, Any]
     translation_options: Dict[str, Any]
+    export_options: Dict[str, Any] = field(default_factory=dict)
     status: str = "queued"    # queued | running | done | failed | cancelled
     steps: Dict[str, Step] = field(default_factory=lambda: {s: Step() for s in STEPS})
     error: Optional[str] = None
@@ -100,6 +102,7 @@ class JobManager:
             target_language=req.target_language,
             asr_options=req.asr.model_dump(),
             translation_options=req.translation.model_dump(),
+            export_options=req.export.model_dump(),
         )
         self._jobs[job.id] = job
         job_dir = self.job_dir(job.id)
@@ -235,7 +238,36 @@ class JobManager:
                 bi_srt.write_text(to_srt(transcript.segments, second_lines=texts), encoding="utf-8")
                 job.artifacts["target_srt"] = str(dst_srt)
                 job.artifacts["bilingual_srt"] = str(bi_srt)
-            await self._set_step(job, loop, "export", "done")
+                variant = job.export_options.get("variant", "bilingual")
+
+            # deliver per user options: 三选一字幕 -> 保存到视频文件夹 / 嵌入生成新视频
+            files = {"source": src_srt,
+                     "target": job.artifacts.get("target_srt"),
+                     "bilingual": job.artifacts.get("bilingual_srt")}
+            srt_file = Path(files.get(variant) or src_srt)
+            e_opts = job.export_options
+            save = e_opts.get("save_to_video_folder", True)
+            embed = e_opts.get("embed_video", False)
+            detail = ""
+            if save or embed:
+                video_dir = Path(job.video_path).parent
+                stem = Path(job.video_path).stem
+                src_lang = transcript.language or job.source_language or "src"
+                names = {"source": f"{stem}.{src_lang}.srt",
+                         "target": f"{stem}.{job.target_language}.srt",
+                         "bilingual": f"{stem}.bilingual.{job.target_language}.srt"}
+                dest = video_dir / names[variant]
+                shutil.copyfile(srt_file, dest)
+                job.artifacts["delivered_srt"] = str(dest)
+                detail = f"saved {dest.name}"
+                if embed:
+                    out_ext = Path(job.video_path).suffix or ".mp4"
+                    out_video = video_dir / f"{stem}.{variant}{out_ext}"
+                    await embed_subtitle(job.video_path, str(srt_file),
+                                         str(out_video), _iso639_2(job.target_language))
+                    job.artifacts["embedded_video"] = str(out_video)
+                    detail += f" + {out_video.name}"
+            await self._set_step(job, loop, "export", "done", detail=detail)
 
             job.status = "done"
             self.hub.publish(job.id, self._snap(job, "done"))
@@ -260,3 +292,11 @@ def _srt_target(transcript: Transcript, texts: List[str]) -> str:
     segs = [Segment(start=s.start, end=s.end, text=t)
             for s, t in zip(transcript.segments, texts)]
     return to_srt(segs)
+
+
+_ISO639_2 = {"zh": "chi", "en": "eng", "ja": "jpn", "ko": "kor", "de": "deu",
+             "fr": "fra", "es": "spa", "ru": "rus", "pt": "por"}
+
+
+def _iso639_2(code: str) -> str:
+    return _ISO639_2.get((code or "").lower()[:2], "und")

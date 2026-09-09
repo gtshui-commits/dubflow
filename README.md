@@ -86,7 +86,7 @@ npm run tauri build   # 打包 .app/.dmg
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | /health | 健康检查 + 当前 ASR 后端 |
-| POST | /jobs | 建任务：`{video_path, source_language, target_language, asr:{model}, translation:{enabled,base_url,api_key,model}}` |
+| POST | /jobs | 建任务：`{video_path, source_language, target_language, asr:{model}, translation:{enabled,provider,base_url,api_key,model}, export:{variant:source\|target\|bilingual, save_to_video_folder, embed_video}}` |
 | GET | /jobs, /jobs/:id | 任务列表/状态（各步骤进度） |
 | GET | /jobs/:id/transcript | 识别结果（段落+时间轴） |
 | POST | /jobs/:id/cancel | 请求取消（步骤间生效） |

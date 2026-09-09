@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+from pathlib import Path
 from typing import Any, Dict
 
 
@@ -38,3 +39,22 @@ async def extract_audio(video_path: str, out_wav: str) -> None:
     _, err = await proc.communicate()
     if proc.returncode != 0:
         raise FFmpegError(f"ffmpeg extract failed: {err.decode(errors='replace')[-800:]}")
+
+
+async def embed_subtitle(video_path: str, srt_path: str, out_path: str,
+                         lang_code: str = "chi") -> None:
+    """Soft-embed an SRT as a subtitle track (video/audio stream copy, no re-encode)."""
+    out_ext = Path(out_path).suffix.lower()
+    codec = "mov_text" if out_ext in (".mp4", ".m4v", ".mov") else "srt"
+    proc = await asyncio.create_subprocess_exec(
+        _require("ffmpeg"), "-y",
+        "-i", str(video_path), "-i", str(srt_path),
+        "-map", "0", "-map", "1:0",
+        "-c:v", "copy", "-c:a", "copy", "-c:s", codec,
+        "-metadata:s:s:0", f"language={lang_code}",
+        str(out_path),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise FFmpegError(f"embed subtitle failed: {err.decode(errors='replace')[-800:]}")
