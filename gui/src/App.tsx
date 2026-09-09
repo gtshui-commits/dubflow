@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, Health, Job, Segment } from "./api";
+import { api, DownloadsSnapshot, Health, Job, Segment } from "./api";
 
 const MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "large-v3-turbo-q4"];
 const STEP_LABELS: Record<string, string> = {
@@ -30,6 +30,7 @@ function App() {
   const [transcript, setTranscript] = useState<{ job: string; segs: Segment[] } | null>(null);
   const [error, setError] = useState("");
   const pollRef = useRef<number | null>(null);
+  const [dl, setDl] = useState<DownloadsSnapshot | null>(null);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
@@ -37,7 +38,11 @@ function App() {
       api.listJobs().then((r) => setJobs(r.jobs)).catch(() => {});
     }, 1000);
     pollRef.current = t;
-    return () => window.clearInterval(t);
+    const t2 = window.setInterval(() => {
+      api.downloads().then(setDl).catch(() => {});
+    }, 2000);
+    api.downloads().then(setDl).catch(() => {});
+    return () => { window.clearInterval(t); window.clearInterval(t2); };
   }, []);
 
   const submit = useCallback(async () => {
@@ -259,6 +264,66 @@ function App() {
           </div>
         </>
       )}
+
+      <h2>模型与依赖</h2>
+      <div className="panel">
+        <div className="row">
+          <b>ffmpeg（捆绑）</b>
+          {dl?.ffmpeg.installed ? (
+            <span className="badge ok">已就绪</span>
+          ) : (
+            <span className="badge err">未下载</span>
+          )}
+          {dl && !dl.ffmpeg.installed && dl.ffmpeg.status !== "downloading" && (
+            <button onClick={() => api.downloadFfmpeg()}>下载当前平台 ffmpeg</button>
+          )}
+          {dl && dl.ffmpeg.status === "downloading" && (
+            <span className="muted">
+              下载中 {Math.round(dl.ffmpeg.progress * 100)}% {dl.ffmpeg.detail}
+            </span>
+          )}
+          {dl && dl.ffmpeg.status === "failed" && (
+            <span className="error">{dl.ffmpeg.detail}</span>
+          )}
+        </div>
+        <table style={{ marginTop: 12 }}>
+          <thead>
+            <tr><th>模型</th><th>后端</th><th>本地大小</th><th>状态</th><th></th></tr>
+          </thead>
+          <tbody>
+            {dl?.models.map((m) => (
+              <tr key={m.key}>
+                <td>{m.key}</td>
+                <td>{m.backend}</td>
+                <td>{m.size_mb} MB</td>
+                <td>
+                  {m.downloaded
+                    ? "已下载"
+                    : m.status === "downloading"
+                    ? `下载中 ${Math.round(m.progress * 100)}%`
+                    : m.status === "failed"
+                    ? <span className="error">失败: {m.detail}</span>
+                    : "未下载"}
+                </td>
+                <td>
+                  {!m.downloaded && (
+                    <button
+                      style={{ padding: "2px 10px" }}
+                      disabled={m.status === "downloading"}
+                      onClick={() => api.downloadModel(m.key)}
+                    >
+                      下载
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          mlx = MacBook Metal GPU；ctranslate2 = Windows/Linux（N卡 CUDA / CPU 兜底，TODO）；whisper.cpp Vulkan（A卡）规划中。
+        </p>
+      </div>
     </>
   );
 }

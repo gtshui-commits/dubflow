@@ -6,8 +6,18 @@ from .base import ASRError, ASRProvider, BackendInfo, ProgressFn, Transcript
 
 
 class WhisperCppProvider(ASRProvider):
-    """Reserved for MVP2: whisper.cpp with Metal / CUDA / Vulkan backends
-    (covers AMD GPUs on Windows/Linux). Not wired up yet."""
+    """A卡 (AMD) / Intel 显卡方案：whisper.cpp Vulkan 后端。
+
+    TODO(MVP2) 三平台后端路线：
+      - MacBook (M 系列):   mlx-whisper (Metal)         -> mlx_provider.py    [已实现]
+      - NVIDIA (Win/Linux):  faster-whisper (CUDA fp16) -> faster_provider.py [代码就绪, 待真机验证]
+      - AMD/Intel (Win/Linux): whisper.cpp (Vulkan)      -> cpp_provider.py    [本文件, 待实现]
+
+    实现要点：
+      1) 按平台捆绑 whisper.cpp 预编译二进制（Vulkan 版），或源码编译
+      2) 通过 pywhispercpp / 子进程调用，输出归一化为 Transcript
+      3) select_provider() 中检测 Vulkan 可用性后启用本 Provider
+    """
 
     name = "whisper.cpp"
 

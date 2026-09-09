@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .asr import describe_backend
 from .config import settings
+from .downloads import downloads_snapshot, start_ffmpeg_download, start_model_download
 from .jobs import JobManager
 from .schemas import JobCreate
 
@@ -85,6 +86,24 @@ async def cancel_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="job not found")
     manager.request_cancel(job)
     return {"ok": True}
+
+
+@app.get("/downloads")
+async def downloads() -> dict:
+    return downloads_snapshot()
+
+
+@app.post("/downloads/models/{key}")
+async def download_model(key: str) -> dict:
+    try:
+        return start_model_download(key)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/downloads/ffmpeg")
+async def download_ffmpeg() -> dict:
+    return start_ffmpeg_download()
 
 
 @app.websocket("/ws/jobs/{job_id}")

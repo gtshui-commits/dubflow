@@ -6,12 +6,19 @@ from contextlib import closing
 from typing import Dict, Optional, Tuple
 
 from .base import ASRError, ASRProvider, BackendInfo, ProgressFn, Segment, Transcript
+from ..config import settings
 
 DEFAULT_MODEL = "base"
 
 
 class FasterWhisperProvider(ASRProvider):
-    """CTranslate2 backend: fastest on NVIDIA CUDA; int8 CPU as universal fallback."""
+    """CTranslate2 backend: fastest on NVIDIA CUDA; int8 CPU as universal fallback.
+
+    TODO(platform-nvidia):
+      - N 卡 (Windows/Linux) 走本后端的 CUDA fp16 路线，代码已实现，
+        待在真实 NVIDIA 机器上验证（驱动/cuDNN 依赖打包 + 精度/速度基准）。
+      - CPU int8 兜底已可工作（模型经 GUI 模型管理器下载到 models_dir/）。
+    """
 
     name = "faster-whisper"
 
@@ -35,8 +42,11 @@ class FasterWhisperProvider(ASRProvider):
                     raise ASRError(
                         "faster-whisper is not installed. Run: pip install faster-whisper"
                     ) from e
+                # local dir (downloaded via the GUI model manager) wins over HF hub
+                local = settings.models_dir / model_size
+                target = str(local) if (local / "model.bin").is_file() else model_size
                 self._models[key] = WhisperModel(
-                    model_size, device=self.device, compute_type=self.compute_type,
+                    target, device=self.device, compute_type=self.compute_type,
                 )
         return self._models[key]
 

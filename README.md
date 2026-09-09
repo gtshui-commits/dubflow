@@ -91,6 +91,7 @@ npm run tauri build   # 打包 .app/.dmg
 | GET | /jobs/:id/transcript | 识别结果（段落+时间轴） |
 | POST | /jobs/:id/cancel | 请求取消（步骤间生效） |
 | WS | /ws/jobs/:id | 实时进度事件 |
+| GET/POST | /downloads, /downloads/models/:key, /downloads/ffmpeg | 模型目录/下载进度/一键下载捆绑 ffmpeg |
 
 任务产物落盘于 `data/jobs/<id>/`：`audio.wav` `transcript.json` `source.srt` `<目标语>.srt` `bilingual.srt`，重跑自动跳过已完成步骤。
 

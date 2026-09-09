@@ -31,6 +31,26 @@ export interface Job {
   backend: BackendInfo | Record<string, never>;
 }
 
+
+export interface DownloadState {
+  status: string;
+  progress: number;
+  detail: string;
+}
+
+export interface ModelInfo extends DownloadState {
+  key: string;
+  repo: string;
+  backend: string;
+  downloaded: boolean;
+  size_mb: number;
+}
+
+export interface DownloadsSnapshot {
+  ffmpeg: DownloadState & { installed: boolean; ffmpeg: string | null };
+  models: ModelInfo[];
+}
+
 export interface Segment {
   start: number;
   end: number;
@@ -72,10 +92,14 @@ export const api = {
       save_to_video_folder: boolean;
       embed_video: boolean;
     };
-  }) => req<Job>("POST", "/jobs", payload),
+    }) => req<Job>("POST", "/jobs", payload),
   getTranscript: (id: string) =>
     req<{ language: string | null; segments: Segment[] }>(
       "GET",
       `/jobs/${id}/transcript`
     ),
+  downloads: () => req<DownloadsSnapshot>("GET", "/downloads"),
+  downloadModel: (key: string) =>
+    req<{ ok: boolean }>("POST", `/downloads/models/${key}`),
+  downloadFfmpeg: () => req<{ ok: boolean }>("POST", "/downloads/ffmpeg"),
 };

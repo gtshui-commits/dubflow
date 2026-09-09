@@ -55,6 +55,15 @@ def describe_backend() -> dict:
     return {"name": "none", "device": "none", "detail": "no ASR backend installed"}
 
 
+# ---------------------------------------------------------------------------
+# TODO(backend-roadmap) 三平台显卡 -> Whisper 后端映射（自动探测 + 用户可覆盖）
+#   [x] MacBook / Apple Silicon    : mlx-whisper (Metal GPU)  -> mlx_provider.py    已实现
+#   [ ] NVIDIA (Windows/Linux)     : faster-whisper (CUDA fp16) -> faster_provider.py 代码就绪, TODO: 真机验证+cuDNN打包
+#   [ ] AMD / Intel (Windows/Linux): whisper.cpp (Vulkan)      -> cpp_provider.py    TODO: MVP2 实现
+#   [x] 兜底 (Windows/Linux 无 N 卡): faster-whisper CPU int8
+# ---------------------------------------------------------------------------
+
+
 def select_provider(model_size: Optional[str] = None) -> ASRProvider:
     """Auto-select the fastest available backend for this machine.
 
