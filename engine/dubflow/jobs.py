@@ -13,9 +13,9 @@ from typing import Any, Dict, List, Optional, Set
 from .asr import select_provider
 from .asr.base import Transcript
 from .config import settings
-from .ffmpeg_tools import embed_subtitle, extract_audio, probe
+from .ffmpeg_tools import burn_subtitles, extract_audio, probe, wav_duration
 from .schemas import JobCreate
-from .subtitles import to_srt
+from .subtitles import to_ass, to_srt
 from .translator import build_translator
 
 log = logging.getLogger(__name__)
@@ -262,9 +262,31 @@ class JobManager:
                 detail = f"saved {dest.name}"
                 if embed:
                     out_ext = Path(job.video_path).suffix or ".mp4"
-                    out_video = video_dir / f"{stem}.{variant}{out_ext}"
-                    await embed_subtitle(job.video_path, str(srt_file),
-                                         str(out_video), _iso639_2(job.target_language))
+                    out_video = video_dir / f"{stem}.{variant}.hardsub{out_ext}"
+                    duration = wav_duration(job_dir / "audio.wav")
+                    # style lives in the ASS file: filter arg stays a plain filename
+                    second = texts if variant in ("target", "bilingual") else None
+                    base = [s.text for s in transcript.segments]
+                    ass_lines = base if variant == "target" else \
+                        (texts if variant == "target" else
+                         [b for b in base])
+                    burn_src = job_dir / "burn.ass"
+                    if variant == "source":
+                        burn_src.write_text(to_ass(transcript.segments), encoding="utf-8")
+                    elif variant == "target":
+                        burn_src.write_text(_ass_target(transcript, texts), encoding="utf-8")
+                    else:
+                        burn_src.write_text(to_ass(transcript.segments, second_lines=texts),
+                                            encoding="utf-8")
+
+                    def burn_progress(pr: float, d: str) -> None:
+                        job.steps["export"].progress = pr
+                        job.steps["export"].detail = d
+                        self._pub_threadsafe(loop, job)
+
+                    await burn_subtitles(job.video_path, str(burn_src),
+                                         str(out_video), duration=duration,
+                                         workdir=str(job_dir), progress=burn_progress)
                     job.artifacts["embedded_video"] = str(out_video)
                     detail += f" + {out_video.name}"
             await self._set_step(job, loop, "export", "done", detail=detail)
@@ -288,7 +310,7 @@ class JobManager:
 def _srt_target(transcript: Transcript, texts: List[str]) -> str:
     """SRT containing only translated text (same timing)."""
     from .asr.base import Segment
-    from .subtitles import to_srt
+    from .subtitles import to_ass, to_srt
     segs = [Segment(start=s.start, end=s.end, text=t)
             for s, t in zip(transcript.segments, texts)]
     return to_srt(segs)
@@ -300,3 +322,11 @@ _ISO639_2 = {"zh": "chi", "en": "eng", "ja": "jpn", "ko": "kor", "de": "deu",
 
 def _iso639_2(code: str) -> str:
     return _ISO639_2.get((code or "").lower()[:2], "und")
+
+
+def _ass_target(transcript: Transcript, texts: List[str]) -> str:
+    from .asr.base import Segment
+    from .subtitles import to_ass
+    segs = [Segment(start=s.start, end=s.end, text=t)
+            for s, t in zip(transcript.segments, texts)]
+    return to_ass(segs)

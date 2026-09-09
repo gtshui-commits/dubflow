@@ -191,7 +191,7 @@ function App() {
                 if (e.target.checked) setSaveSrt(true);
               }}
             />
-            <span className="muted">嵌入字幕生成新视频</span>
+            <span className="muted">烧录硬字幕生成新视频</span>
           </label>
         </div>
         <div className="row" style={{ marginTop: 12 }}>

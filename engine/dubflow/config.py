@@ -42,6 +42,11 @@ class Settings:
 settings = Settings.load()
 settings.data_dir.mkdir(parents=True, exist_ok=True)
 settings.models_dir.mkdir(parents=True, exist_ok=True)
+
+# Prefer project-bundled ffmpeg/ffprobe (bin/) everywhere in the engine process,
+# including third-party libs that shell out to bare "ffmpeg" (e.g. mlx_whisper).
+_BIN_DIR = Path(__file__).resolve().parents[2] / "bin"
+os.environ["PATH"] = f"{_BIN_DIR}{os.pathsep}" + os.environ.get("PATH", "")
 # huggingface_hub reads this at import time; keep CN-friendly default,
 # override with HF_ENDPOINT=https://huggingface.co if you prefer.
 os.environ.setdefault("HF_ENDPOINT", settings.hf_endpoint)
