@@ -18,8 +18,28 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
 
+import mlx.core as mx  # noqa: E402
+
+from dubflow.asr.base import BackendInfo  # noqa: E402
 from dubflow.asr.mlx_provider import MLXWhisperProvider  # noqa: E402
 from dubflow.asr.faster_provider import FasterWhisperProvider  # noqa: E402
+
+
+class MLXCpuProvider(MLXWhisperProvider):
+    """Same engine + same weights, but forced onto CPU. For GPU-vs-CPU comparison."""
+
+    name = "mlx-cpu"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.info = BackendInfo(self.name, "cpu", "MLX forced to CPU")
+
+    def transcribe(self, *args, **kwargs):
+        mx.set_default_device(mx.cpu)
+        try:
+            return super().transcribe(*args, **kwargs)
+        finally:
+            mx.set_default_device(mx.gpu)
 
 
 def audio_duration(path: str) -> float:
@@ -40,6 +60,7 @@ def main() -> int:
     for model in [m.strip() for m in args.models.split(",") if m.strip()]:
         for label, provider in [
             ("mlx/metal", MLXWhisperProvider()),
+            ("mlx/cpu", MLXCpuProvider()),
             ("faster/cpu", FasterWhisperProvider("cpu", "int8")),
         ]:
             for r in range(args.repeats):

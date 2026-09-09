@@ -12,10 +12,10 @@ ASR 多后端（自动探测，输出统一为 Transcript）：
 
 | 硬件 | 引擎 | 加速 |
 |---|---|---|
-| MacBook (M 系列) | mlx-whisper | Metal ✅ 当前已实现 |
+| MacBook (M 系列) | mlx-whisper | Metal ✅ 已实现，**强制 GPU，无 CPU 兜底**（Apple Silicon 必有 Metal） |
 | NVIDIA | faster-whisper | CUDA（接口已留，MVP2 验证） |
 | AMD / Intel | whisper.cpp | Vulkan（MVP2） |
-| 兜底 | faster-whisper | CPU int8 ✅ 已实现 |
+| Windows/Linux 无显卡 | faster-whisper | CPU int8 兜底 ✅ 已实现 |
 
 ## 目录
 
