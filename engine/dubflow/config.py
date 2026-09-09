@@ -19,6 +19,8 @@ class Settings:
     translate_base_url: str
     translate_api_key: str
     translate_model: str
+    msft_translator_key: str
+    msft_translator_region: str
 
     @classmethod
     def load(cls) -> "Settings":
@@ -32,6 +34,8 @@ class Settings:
             translate_base_url=_env("DUBFLOW_TRANSLATE_BASE_URL", "https://api.openai.com/v1"),
             translate_api_key=_env("DUBFLOW_TRANSLATE_API_KEY", ""),
             translate_model=_env("DUBFLOW_TRANSLATE_MODEL", "gpt-4o-mini"),
+            msft_translator_key=_env("DUBFLOW_MSFT_TRANSLATOR_KEY", ""),
+            msft_translator_region=_env("DUBFLOW_MSFT_TRANSLATOR_REGION", "global"),
         )
 
 

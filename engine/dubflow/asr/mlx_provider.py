@@ -17,6 +17,7 @@ MODEL_MAP = {
     "medium": "mlx-community/whisper-medium-mlxfp16",
     "large-v3": "mlx-community/whisper-large-v3-4bit",
     "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+    "large-v3-turbo-q4": "mlx-community/whisper-large-v3-turbo-q4",
 }
 
 

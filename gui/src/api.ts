@@ -61,8 +61,10 @@ export const api = {
     asr: { provider: string; model: string | null };
     translation: {
       enabled: boolean;
+      provider: string;
       base_url?: string;
       api_key?: string;
+      region?: string;
       model?: string;
     };
   }) => req<Job>("POST", "/jobs", payload),

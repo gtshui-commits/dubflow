@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, Health, Job, Segment } from "./api";
 
-const MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"];
+const MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "large-v3-turbo-q4"];
 const STEP_LABELS: Record<string, string> = {
   probe: "探测",
   extract_audio: "提取音频",
@@ -17,7 +17,10 @@ function App() {
   const [targetLang, setTargetLang] = useState("zh");
   const [model, setModel] = useState("large-v3-turbo");
   const [translate, setTranslate] = useState(false);
+  const [trProvider, setTrProvider] = useState("llm");
   const [apiKey, setApiKey] = useState("");
+  const [msftKey, setMsftKey] = useState("");
+  const [msftRegion, setMsftRegion] = useState("global");
   const [apiBase, setApiBase] = useState("https://api.openai.com/v1");
   const [apiModel, setApiModel] = useState("gpt-4o-mini");
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -44,15 +47,18 @@ function App() {
         asr: { provider: "auto", model },
         translation: {
           enabled: translate,
-          base_url: apiBase || undefined,
-          api_key: apiKey || undefined,
-          model: apiModel || undefined,
+          provider: trProvider,
+          base_url: trProvider === "llm" ? (apiBase || undefined) : undefined,
+          api_key: trProvider === "llm" ? (apiKey || undefined)
+                 : trProvider === "microsoft" ? (msftKey || undefined) : undefined,
+          region: trProvider === "microsoft" ? (msftRegion || undefined) : undefined,
+          model: trProvider === "llm" ? (apiModel || undefined) : undefined,
         },
       });
     } catch (e) {
       setError(String(e));
     }
-  }, [videoPath, sourceLang, targetLang, model, translate, apiKey, apiBase, apiModel]);
+  }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion]);
 
   const showTranscript = useCallback(async (id: string) => {
     try {
@@ -125,15 +131,31 @@ function App() {
               checked={translate}
               onChange={(e) => setTranslate(e.target.checked)}
             />
-            <span className="muted">LLM 翻译</span>
+            <span className="muted">翻译</span>
           </label>
+          {translate && (
+            <select value={trProvider} onChange={(e) => setTrProvider(e.target.value)}>
+              <option value="llm">LLM 翻译</option>
+              <option value="google">谷歌翻译</option>
+              <option value="microsoft">微软翻译</option>
+            </select>
+          )}
         </div>
-        {translate && (
+        {translate && trProvider === "llm" && (
           <div className="row" style={{ marginTop: 10 }}>
             <input type="text" style={{ flex: 2 }} value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API Base URL" />
             <input type="text" style={{ flex: 1 }} value={apiModel} onChange={(e) => setApiModel(e.target.value)} placeholder="模型名" />
             <input type="text" style={{ flex: 1 }} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API Key" />
           </div>
+        )}
+        {translate && trProvider === "microsoft" && (
+          <div className="row" style={{ marginTop: 10 }}>
+            <input type="text" style={{ flex: 2 }} value={msftKey} onChange={(e) => setMsftKey(e.target.value)} placeholder="Azure Translator Key（免费 F0 档即可）" />
+            <input type="text" style={{ flex: 0, width: 120 }} value={msftRegion} onChange={(e) => setMsftRegion(e.target.value)} placeholder="区域，如 global" />
+          </div>
+        )}
+        {translate && trProvider === "google" && (
+          <div className="muted" style={{ marginTop: 8 }}>谷歌免费接口，经系统代理访问，无需 key。</div>
         )}
         <div className="row" style={{ marginTop: 12 }}>
           <button disabled={!videoPath.trim() || !health} onClick={submit}>

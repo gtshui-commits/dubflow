@@ -12,9 +12,11 @@ class ASROptions(BaseModel):
 
 class TranslationOptions(BaseModel):
     enabled: bool = False
-    base_url: Optional[str] = None  # default from settings (env)
-    api_key: Optional[str] = None
-    model: Optional[str] = None
+    provider: str = "llm"           # llm | google | microsoft
+    base_url: Optional[str] = None  # llm only; default from settings (env)
+    api_key: Optional[str] = None   # llm or microsoft(azure key)
+    region: Optional[str] = None    # microsoft azure region, e.g. global
+    model: Optional[str] = None     # llm only
 
 
 class JobCreate(BaseModel):

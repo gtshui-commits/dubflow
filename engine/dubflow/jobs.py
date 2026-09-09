@@ -15,7 +15,7 @@ from .config import settings
 from .ffmpeg_tools import extract_audio, probe
 from .schemas import JobCreate
 from .subtitles import to_srt
-from .translator import LLMTranslator
+from .translator import build_translator
 
 log = logging.getLogger(__name__)
 
@@ -208,12 +208,8 @@ class JobManager:
             if t_opts.get("enabled"):
                 await self._set_step(job, loop, "translate", "running")
                 self._check_cancel(job)
-                translator = LLMTranslator(
-                    base_url=t_opts.get("base_url") or settings.translate_base_url,
-                    api_key=t_opts.get("api_key") or settings.translate_api_key,
-                    model=t_opts.get("model") or settings.translate_model,
-                    target_lang=job.target_language,
-                    source_lang=job.source_language,
+                translator = build_translator(
+                    t_opts, job.target_language, job.source_language,
                 )
 
                 def tr_progress(p: float, detail: str) -> None:
