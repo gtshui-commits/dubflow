@@ -5,6 +5,7 @@ import logging
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
 from .asr import describe_backend
@@ -15,6 +16,20 @@ from .schemas import JobCreate
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 app = FastAPI(title="DubFlow Engine", version=__version__)
+
+# GUI dev (vite :5173) and Tauri webview origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "tauri://localhost",
+        "http://tauri.localhost",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 manager = JobManager()
 
 
