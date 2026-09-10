@@ -57,6 +57,12 @@ export interface Segment {
   text: string;
 }
 
+export interface EditableSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(ENGINE_URL + path, {
     method,
@@ -94,10 +100,31 @@ export const api = {
     };
     }) => req<Job>("POST", "/jobs", payload),
   getTranscript: (id: string) =>
-    req<{ language: string | null; segments: Segment[] }>(
-      "GET",
-      `/jobs/${id}/transcript`
-    ),
+    req<{
+      language: string | null;
+      segments: Segment[];
+      translations: string[] | null;
+      target_language?: string;
+    }>("GET", `/jobs/${id}/transcript`),
+  updateTranscript: (
+    id: string,
+    segments: EditableSegment[],
+    translations?: string[]
+  ) =>
+    req<{ ok: boolean; segments: number }>("PUT", `/jobs/${id}/transcript`, {
+      segments,
+      translations,
+    }),
+  rowOp: (id: string, index: number, op: "merge_next" | "split" | "delete") =>
+    req<{ ok: boolean }>("POST", `/jobs/${id}/segments/${index}/${op}`),
+  reexport: (
+    id: string,
+    overrides: {
+      variant?: string;
+      save_to_video_folder?: boolean;
+      embed_video?: boolean;
+    }
+  ) => req<{ ok: boolean }>("POST", `/jobs/${id}/export`, overrides),
   downloads: () => req<DownloadsSnapshot>("GET", "/downloads"),
   downloadModel: (key: string) =>
     req<{ ok: boolean }>("POST", `/downloads/models/${key}`),

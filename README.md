@@ -92,12 +92,14 @@ npm run tauri build   # 打包 .app/.dmg
 | POST | /jobs/:id/cancel | 请求取消（步骤间生效） |
 | WS | /ws/jobs/:id | 实时进度事件 |
 | GET/POST | /downloads, /downloads/models/:key, /downloads/ffmpeg | 模型目录/下载进度/一键下载捆绑 ffmpeg |
+| PUT/POST | /jobs/:id/transcript, /jobs/:id/segments/:i/{split,merge_next,delete}, /jobs/:id/export | 字幕编辑器（改文本/时间、拆分/合并/删除）+ 按选项重新导出 |
 
 任务产物落盘于 `data/jobs/<id>/`：`audio.wav` `transcript.json` `source.srt` `<目标语>.srt` `bilingual.srt`，重跑自动跳过已完成步骤。
 
 ## 路线图
 
 - [x] MVP：导入 → Metal 识别 → 导出 SRT（已验证）
+- [x] 字幕编辑器（文本/时间编辑、拆分/合并/删除、重新导出）
 - [ ] 字幕编辑器 / 时间轴
 - [ ] whisper.cpp 后端（AMD/Vulkan）+ NVIDIA CUDA 实测
 - [ ] TTS 配音（edge-tts）+ 人声分离（demucs）

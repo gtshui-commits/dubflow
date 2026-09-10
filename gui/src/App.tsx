@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, DownloadsSnapshot, Health, Job, Segment } from "./api";
+import { api, DownloadsSnapshot, EditableSegment, Health, Job, Segment } from "./api";
 
 const MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "large-v3-turbo-q4"];
 const STEP_LABELS: Record<string, string> = {
@@ -27,7 +27,13 @@ function App() {
   const [apiBase, setApiBase] = useState("https://api.openai.com/v1");
   const [apiModel, setApiModel] = useState("gpt-4o-mini");
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [transcript, setTranscript] = useState<{ job: string; segs: Segment[] } | null>(null);
+  const [editor, setEditor] = useState<{
+    job: string;
+    segments: EditableSegment[];
+    translations: string[];
+  } | null>(null);
+  const [reexportVariant, setReexportVariant] = useState("bilingual");
+  const [reexportEmbed, setReexportEmbed] = useState(false);
   const [error, setError] = useState("");
   const pollRef = useRef<number | null>(null);
   const [dl, setDl] = useState<DownloadsSnapshot | null>(null);
@@ -73,14 +79,82 @@ function App() {
     }
   }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion, subtitleVariant, saveSrt, embedVideo]);
 
-  const showTranscript = useCallback(async (id: string) => {
+  const loadTranscript = useCallback(async (id: string) => {
     try {
       const tr = await api.getTranscript(id);
-      setTranscript({ job: id, segs: tr.segments });
+      setEditor({
+        job: id,
+        segments: tr.segments.map((s) => ({ start: s.start, end: s.end, text: s.text })),
+        translations: tr.translations ?? [],
+      });
     } catch (e) {
       setError(String(e));
     }
   }, []);
+
+  const saveEdits = useCallback(async () => {
+    if (!editor) return;
+    setError("");
+    try {
+      await api.updateTranscript(
+        editor.job,
+        editor.segments,
+        editor.translations.length ? editor.translations : undefined
+      );
+      await loadTranscript(editor.job);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [editor]);
+
+  const rowOp = useCallback(
+    async (op: "merge_next" | "split" | "delete", i: number) => {
+      if (!editor) return;
+      setError("");
+      try {
+        // persist text edits first so the row operation applies to them
+        await api.updateTranscript(
+          editor.job,
+          editor.segments,
+          editor.translations.length ? editor.translations : undefined
+        );
+        await api.rowOp(editor.job, i, op);
+        await loadTranscript(editor.job);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [editor]
+  );
+
+  const doReexport = useCallback(async () => {
+    if (!editor) return;
+    setError("");
+    try {
+      await api.reexport(editor.job, {
+        variant: reexportVariant,
+        save_to_video_folder: true,
+        embed_video: reexportEmbed,
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [editor, reexportVariant, reexportEmbed]);
+
+  const updSeg = (i: number, patch: Partial<EditableSegment>) => {
+    setEditor((ed) =>
+      ed
+        ? { ...ed, segments: ed.segments.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
+        : ed
+    );
+  };
+  const updTr = (i: number, v: string) => {
+    setEditor((ed) =>
+      ed
+        ? { ...ed, translations: ed.translations.map((t, j) => (j === i ? v : t)) }
+        : ed
+    );
+  };
 
   const overall = (j: Job) => {
     const vals = Object.values(j.steps);
@@ -230,10 +304,10 @@ function App() {
                 )}
                 <button
                   style={{ marginLeft: "auto", padding: "2px 10px" }}
-                  onClick={() => showTranscript(j.id)}
+                  onClick={() => loadTranscript(j.id)}
                   disabled={j.status !== "done"}
                 >
-                  查看字幕
+                  编辑字幕
                 </button>
               </div>
               <div className="bar"><div style={{ width: `${o.pct}%` }} /></div>
@@ -243,24 +317,83 @@ function App() {
         })}
       </div>
 
-      {transcript && (
+      {editor && (
         <>
-          <h2>字幕预览（{transcript.job}）</h2>
+          <h2>字幕编辑器（{editor.job}）</h2>
           <div className="panel">
-            <table>
+            <div className="row">
+              <button onClick={saveEdits}>保存修改</button>
+              <label className="muted">重新导出类型</label>
+              <select value={reexportVariant} onChange={(e) => setReexportVariant(e.target.value)}>
+                <option value="bilingual">双语对照</option>
+                <option value="target">仅译文</option>
+                <option value="source">仅原文</option>
+              </select>
+              <label className="row" style={{ gap: 4 }}>
+                <input
+                  type="checkbox"
+                  style={{ width: "auto" }}
+                  checked={reexportEmbed}
+                  onChange={(e) => setReexportEmbed(e.target.checked)}
+                />
+                <span className="muted">烧录硬字幕</span>
+              </label>
+              <button onClick={doReexport}>重新导出</button>
+              <span className="muted">合并/拆分/删除会先自动保存</span>
+            </div>
+            <table style={{ marginTop: 10 }}>
               <thead>
-                <tr><th>开始</th><th>结束</th><th>文本</th></tr>
+                <tr><th>开始</th><th>结束</th><th>原文</th><th>译文</th><th>操作</th></tr>
               </thead>
               <tbody>
-                {transcript.segs.map((s, i) => (
+                {editor.segments.map((s, i) => (
                   <tr key={i}>
-                    <td>{s.start.toFixed(2)}</td>
-                    <td>{s.end.toFixed(2)}</td>
-                    <td>{s.text}</td>
+                    <td>
+                      <input
+                        type="number"
+                        step="0.01"
+                        style={{ width: 78 }}
+                        value={s.start}
+                        onChange={(e) => updSeg(i, { start: Number(e.target.value) })}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        step="0.01"
+                        style={{ width: 78 }}
+                        value={s.end}
+                        onChange={(e) => updSeg(i, { end: Number(e.target.value) })}
+                      />
+                    </td>
+                    <td style={{ minWidth: 220 }}>
+                      <input
+                        type="text"
+                        style={{ width: "100%" }}
+                        value={s.text}
+                        onChange={(e) => updSeg(i, { text: e.target.value })}
+                      />
+                    </td>
+                    <td style={{ minWidth: 220 }}>
+                      <input
+                        type="text"
+                        style={{ width: "100%" }}
+                        value={editor.translations[i] ?? ""}
+                        onChange={(e) => updTr(i, e.target.value)}
+                      />
+                    </td>
+                    <td>
+                      <button style={{ padding: "2px 6px" }} title="拆分为两条" onClick={() => rowOp("split", i)}>拆</button>{" "}
+                      <button style={{ padding: "2px 6px" }} title="与下一条合并" onClick={() => rowOp("merge_next", i)}>并</button>{" "}
+                      <button style={{ padding: "2px 6px" }} title="删除此条" onClick={() => rowOp("delete", i)}>删</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            <p className="muted" style={{ marginBottom: 0 }}>
+              编辑后先「保存修改」；「重新导出」按当前选项重新生成 SRT / 硬字幕视频（导出进度见任务列表）。
+            </p>
           </div>
         </>
       )}

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from .asr import select_provider
-from .asr.base import Transcript
+from .asr.base import Segment, Transcript
 from .config import settings
 from .ffmpeg_tools import burn_subtitles, extract_audio, probe, wav_duration
 from .schemas import JobCreate
@@ -46,6 +46,7 @@ class Job:
     backend: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     transcript: Optional[Transcript] = None
+    translations: Optional[List[str]] = None
     cancel_requested: bool = False
 
     def out(self) -> dict:
@@ -138,6 +139,10 @@ class JobManager:
     def _persist(self, job: Job) -> None:
         state = job.out()
         state["transcript"] = job.transcript.to_dict() if job.transcript else None
+        state["translations"] = job.translations
+        state["asr_options"] = job.asr_options
+        state["translation_options"] = job.translation_options
+        state["export_options"] = job.export_options
         path = self.job_dir(job.id) / "job.json"
         path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
 
@@ -221,75 +226,13 @@ class JobManager:
                     self._pub_threadsafe(loop, job)
 
                 texts = await asyncio.to_thread(translator.translate_transcript, transcript, tr_progress)
+                job.translations = texts
                 await self._set_step(job, loop, "translate", "done")
             else:
                 await self._set_step(job, loop, "translate", "skipped")
 
-            # 5. export subtitles
-            await self._set_step(job, loop, "export", "running")
-            self._check_cancel(job)
-            src_srt = job_dir / "source.srt"
-            src_srt.write_text(to_srt(transcript.segments), encoding="utf-8")
-            job.artifacts["source_srt"] = str(src_srt)
-            if texts is not None:
-                dst_srt = job_dir / f"{job.target_language}.srt"
-                dst_srt.write_text(_srt_target(transcript, texts), encoding="utf-8")
-                bi_srt = job_dir / "bilingual.srt"
-                bi_srt.write_text(to_srt(transcript.segments, second_lines=texts), encoding="utf-8")
-                job.artifacts["target_srt"] = str(dst_srt)
-                job.artifacts["bilingual_srt"] = str(bi_srt)
-                variant = job.export_options.get("variant", "bilingual")
-
-            # deliver per user options: 三选一字幕 -> 保存到视频文件夹 / 嵌入生成新视频
-            files = {"source": src_srt,
-                     "target": job.artifacts.get("target_srt"),
-                     "bilingual": job.artifacts.get("bilingual_srt")}
-            srt_file = Path(files.get(variant) or src_srt)
-            e_opts = job.export_options
-            save = e_opts.get("save_to_video_folder", True)
-            embed = e_opts.get("embed_video", False)
-            detail = ""
-            if save or embed:
-                video_dir = Path(job.video_path).parent
-                stem = Path(job.video_path).stem
-                src_lang = transcript.language or job.source_language or "src"
-                names = {"source": f"{stem}.{src_lang}.srt",
-                         "target": f"{stem}.{job.target_language}.srt",
-                         "bilingual": f"{stem}.bilingual.{job.target_language}.srt"}
-                dest = video_dir / names[variant]
-                shutil.copyfile(srt_file, dest)
-                job.artifacts["delivered_srt"] = str(dest)
-                detail = f"saved {dest.name}"
-                if embed:
-                    out_ext = Path(job.video_path).suffix or ".mp4"
-                    out_video = video_dir / f"{stem}.{variant}.hardsub{out_ext}"
-                    duration = wav_duration(job_dir / "audio.wav")
-                    # style lives in the ASS file: filter arg stays a plain filename
-                    second = texts if variant in ("target", "bilingual") else None
-                    base = [s.text for s in transcript.segments]
-                    ass_lines = base if variant == "target" else \
-                        (texts if variant == "target" else
-                         [b for b in base])
-                    burn_src = job_dir / "burn.ass"
-                    if variant == "source":
-                        burn_src.write_text(to_ass(transcript.segments), encoding="utf-8")
-                    elif variant == "target":
-                        burn_src.write_text(_ass_target(transcript, texts), encoding="utf-8")
-                    else:
-                        burn_src.write_text(to_ass(transcript.segments, second_lines=texts),
-                                            encoding="utf-8")
-
-                    def burn_progress(pr: float, d: str) -> None:
-                        job.steps["export"].progress = pr
-                        job.steps["export"].detail = d
-                        self._pub_threadsafe(loop, job)
-
-                    await burn_subtitles(job.video_path, str(burn_src),
-                                         str(out_video), duration=duration,
-                                         workdir=str(job_dir), progress=burn_progress)
-                    job.artifacts["embedded_video"] = str(out_video)
-                    detail += f" + {out_video.name}"
-            await self._set_step(job, loop, "export", "done", detail=detail)
+            # 5. export subtitles (shared with editor re-export)
+            await self._do_export(job, loop)
 
             job.status = "done"
             self.hub.publish(job.id, self._snap(job, "done"))
@@ -305,6 +248,229 @@ class JobManager:
             job.error = f"{type(e).__name__}: {e}"
             self.hub.publish(job.id, self._snap(job, "failed"))
             self._persist(job)
+
+    # ---------- editor: mutations + re-export ----------
+
+    async def _do_export(self, job: Job, loop: asyncio.AbstractEventLoop) -> None:
+        """Generate SRT artifacts + deliver (save to video folder / burn video)."""
+        job_dir = self.job_dir(job.id)
+        await self._set_step(job, loop, "export", "running", 0.0, "writing srt")
+        transcript = job.transcript
+        texts = job.translations
+        src_srt = job_dir / "source.srt"
+        src_srt.write_text(to_srt(transcript.segments), encoding="utf-8")
+        job.artifacts["source_srt"] = str(src_srt)
+        variant = "source"
+        if texts:
+            dst_srt = job_dir / f"{job.target_language}.srt"
+            dst_srt.write_text(_srt_target(transcript, texts), encoding="utf-8")
+            bi_srt = job_dir / "bilingual.srt"
+            bi_srt.write_text(to_srt(transcript.segments, second_lines=texts), encoding="utf-8")
+            job.artifacts["target_srt"] = str(dst_srt)
+            job.artifacts["bilingual_srt"] = str(bi_srt)
+            variant = job.export_options.get("variant", "bilingual")
+
+        files = {"source": src_srt,
+                 "target": job.artifacts.get("target_srt"),
+                 "bilingual": job.artifacts.get("bilingual_srt")}
+        srt_file = Path(files.get(variant) or src_srt)
+        e_opts = job.export_options
+        save = e_opts.get("save_to_video_folder", True)
+        embed = e_opts.get("embed_video", False)
+        detail = ""
+        if save or embed:
+            video_dir = Path(job.video_path).parent
+            stem = Path(job.video_path).stem
+            src_lang = transcript.language or job.source_language or "src"
+            names = {"source": f"{stem}.{src_lang}.srt",
+                     "target": f"{stem}.{job.target_language}.srt",
+                     "bilingual": f"{stem}.bilingual.{job.target_language}.srt"}
+            dest = video_dir / names[variant]
+            shutil.copyfile(srt_file, dest)
+            job.artifacts["delivered_srt"] = str(dest)
+            detail = f"saved {dest.name}"
+            if embed:
+                out_ext = Path(job.video_path).suffix or ".mp4"
+                out_video = video_dir / f"{stem}.{variant}.hardsub{out_ext}"
+                duration = wav_duration(job_dir / "audio.wav")
+
+                def burn_progress(pr: float, d: str) -> None:
+                    job.steps["export"].progress = pr
+                    job.steps["export"].detail = d
+                    self._pub_threadsafe(loop, job)
+
+                await burn_subtitles(job.video_path, str(srt_file),
+                                     str(out_video), duration=duration,
+                                     workdir=str(job_dir), progress=burn_progress)
+                job.artifacts["embedded_video"] = str(out_video)
+                detail += f" + {out_video.name}"
+        await self._set_step(job, loop, "export", "done", 1.0, detail)
+
+    def _regen_srts(self, job: Job) -> None:
+        """Refresh in-project SRT artifacts after an edit (no delivery)."""
+        job_dir = self.job_dir(job.id)
+        transcript = job.transcript
+        (job_dir / "source.srt").write_text(to_srt(transcript.segments), encoding="utf-8")
+        if job.translations:
+            (job_dir / f"{job.target_language}.srt").write_text(
+                _srt_target(transcript, job.translations), encoding="utf-8")
+            (job_dir / "bilingual.srt").write_text(
+                to_srt(transcript.segments, second_lines=job.translations), encoding="utf-8")
+        self._persist(job)
+
+    def update_transcript(self, job: Job, segments: List[Dict[str, Any]],
+                          translations: Optional[List[str]]) -> None:
+        segs = [Segment(start=float(s["start"]), end=float(s["end"]), text=str(s["text"]))
+                for s in segments]
+        if translations is not None and len(translations) != len(segs):
+            raise ValueError("translations count mismatch")
+        lang = job.transcript.language if job.transcript else None
+        job.transcript = Transcript(language=lang, segments=segs)
+        if translations is not None:
+            job.translations = [str(t) for t in translations]
+        elif job.translations:
+            job.translations = job.translations[:len(segs)]
+        self._regen_srts(job)
+
+    def merge_next(self, job: Job, index: int) -> None:
+        segs = job.transcript.segments
+        if index < 0 or index + 1 >= len(segs):
+            raise ValueError("no next segment to merge")
+        a, b = segs[index], segs[index + 1]
+        a.end = b.end
+        sep = " " if (a.text.isascii() and b.text.isascii()) else ""
+        a.text = (a.text + sep + b.text).strip()
+        if job.translations:
+            t1, t2 = job.translations[index], job.translations[index + 1]
+            sep_t = " " if (t1.isascii() and t2.isascii()) else ""
+            job.translations[index] = (t1 + sep_t + t2).strip()
+            del job.translations[index + 1]
+        del segs[index + 1]
+        self._regen_srts(job)
+
+    def split_segment(self, job: Job, index: int, at_time: Optional[float]) -> None:
+        segs = job.transcript.segments
+        seg = segs[index]
+        if seg.end - seg.start < 0.3:
+            raise ValueError("segment too short to split")
+        mid = (seg.start + seg.end) / 2.0
+        t = min(max(at_time if at_time is not None else mid, seg.start + 0.05), seg.end - 0.05)
+        ratio = min(max((t - seg.start) / max(seg.end - seg.start, 1e-6), 0.05), 0.95)
+
+        def split_text(text: str) -> tuple:
+            if "\n" in text:
+                parts = text.split("\n", 1)
+                return parts[0].strip(), parts[1].strip()
+            if " " in text:
+                positions = [i for i, ch in enumerate(text) if ch == " "]
+                pos = min(positions, key=lambda i: abs(i / len(text) - ratio))
+                return text[:pos].strip(), text[pos:].strip()
+            cut = int(len(text) * ratio)
+            return text[:cut].strip(), text[cut:].strip()
+
+        t1, t2 = split_text(seg.text)
+        new_seg = Segment(start=t, end=seg.end, text=t2)
+        seg.end = t
+        seg.text = t1
+        segs.insert(index + 1, new_seg)
+        if job.translations:
+            u1, u2 = split_text(job.translations[index])
+            job.translations[index] = u1
+            job.translations.insert(index + 1, u2)
+        self._regen_srts(job)
+
+    def delete_segment(self, job: Job, index: int) -> None:
+        segs = job.transcript.segments
+        if index < 0 or index >= len(segs):
+            raise ValueError("index out of range")
+        del segs[index]
+        if job.translations and index < len(job.translations):
+            del job.translations[index]
+        self._regen_srts(job)
+
+    def start_export(self, job: Job) -> None:
+        job.steps["export"].status = "running"
+        self.tasks[job.id] = asyncio.get_running_loop().create_task(self._export_task(job))
+
+    async def _export_task(self, job: Job) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            await self._do_export(job, loop)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            log.exception("re-export failed")
+            await self._set_step(job, loop, "export", "failed", detail=f"{type(e).__name__}: {e}")
+
+    def restore_from_disk(self) -> int:
+        """Rebuild jobs from job.json after an engine restart."""
+        count = 0
+        base = settings.data_dir / "jobs"
+        if not base.exists():
+            return 0
+        for jf in sorted(base.glob("*/job.json")):
+            try:
+                state = json.loads(jf.read_text())
+            except Exception:
+                continue
+            jid = state.get("id")
+            if not jid or jid in self._jobs:
+                continue
+            job = Job(
+                id=jid,
+                video_path=state.get("video_path", ""),
+                source_language=state.get("source_language"),
+                target_language=state.get("target_language", "zh"),
+                asr_options=state.get("asr_options", {}),
+                translation_options=state.get("translation_options", {}),
+                export_options=state.get("export_options", {}),
+                status=state.get("status", "failed"),
+                error=state.get("error"),
+                artifacts=state.get("artifacts", {}),
+                backend=state.get("backend", {}),
+                created_at=state.get("created_at", time.time()),
+            )
+            if state.get("status") in ("queued", "running"):
+                job.status = "failed"
+                job.error = "engine restarted during job"
+            for name, s in state.get("steps", {}).items():
+                if name in job.steps:
+                    job.steps[name] = Step(status=s.get("status", "pending"),
+                                           progress=s.get("progress", 0.0),
+                                           detail=s.get("detail", ""))
+            tr = state.get("transcript")
+            if tr and tr.get("segments"):
+                job.transcript = Transcript(
+                    language=tr.get("language"),
+                    segments=[Segment(start=float(s["start"]), end=float(s["end"]),
+                                      text=str(s.get("text", "")))
+                              for s in tr["segments"]])
+            job.translations = state.get("translations")
+            # backfill translations for legacy jobs: parse target SRT artifact
+            if not job.translations and job.artifacts.get("target_srt"):
+                tsp = Path(job.artifacts["target_srt"])
+                if tsp.is_file():
+                    texts = _parse_srt_texts(tsp.read_text(encoding="utf-8"))
+                    if len(texts) == len(job.transcript.segments) if job.transcript else False:
+                        job.translations = texts
+            self._jobs[jid] = job
+            count += 1
+        return count
+
+def _parse_srt_texts(srt_content: str) -> List[str]:
+    """Extract cue texts (joining multi-line cues with \n) from SRT content."""
+    texts: List[str] = []
+    block: List[str] = []
+    for raw in srt_content.splitlines() + [""]:
+        line = raw.strip()
+        if not line:
+            if block:
+                text_lines = [l for l in block if not l.isdigit() and "-->" not in l]
+                texts.append("\n".join(text_lines).strip())
+                block = []
+            continue
+        block.append(line)
+    return [t for t in texts if t]
 
 
 def _srt_target(transcript: Transcript, texts: List[str]) -> str:
