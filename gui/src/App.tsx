@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, DownloadsSnapshot, EditableSegment, Health, Job, Segment } from "./api";
+import Timeline from "./Timeline";
 
 const MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "large-v3-turbo-q4"];
 const STEP_LABELS: Record<string, string> = {
@@ -32,6 +33,7 @@ function App() {
     segments: EditableSegment[];
     translations: string[];
   } | null>(null);
+  const [selectedSeg, setSelectedSeg] = useState<number | null>(null);
   const [reexportVariant, setReexportVariant] = useState("bilingual");
   const [reexportEmbed, setReexportEmbed] = useState(false);
   const [error, setError] = useState("");
@@ -341,13 +343,20 @@ function App() {
               <button onClick={doReexport}>重新导出</button>
               <span className="muted">合并/拆分/删除会先自动保存</span>
             </div>
+            <Timeline
+              jobId={editor.job}
+              segments={editor.segments}
+              selectedIndex={selectedSeg}
+              onChange={(i, start, end) => updSeg(i, { start, end })}
+              onSelect={setSelectedSeg}
+            />
             <table style={{ marginTop: 10 }}>
               <thead>
                 <tr><th>开始</th><th>结束</th><th>原文</th><th>译文</th><th>操作</th></tr>
               </thead>
               <tbody>
                 {editor.segments.map((s, i) => (
-                  <tr key={i}>
+                  <tr key={i} onClick={() => setSelectedSeg(i)} style={{ cursor: "default" }}>
                     <td>
                       <input
                         type="number"

@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+from fastapi.responses import FileResponse
 
 from . import __version__
 from .asr import describe_backend
@@ -152,6 +153,18 @@ class ExportOverrides(BaseModel):
     variant: Optional[str] = None
     save_to_video_folder: Optional[bool] = None
     embed_video: Optional[bool] = None
+
+
+@app.get("/jobs/{job_id}/audio")
+async def get_job_audio(job_id: str):
+    """Extracted audio for the GUI waveform timeline."""
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    path = manager.job_dir(job_id) / "audio.wav"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="audio not extracted yet")
+    return FileResponse(str(path), media_type="audio/wav")
 
 
 @app.post("/jobs/{job_id}/export")
