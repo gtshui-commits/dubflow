@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, DownloadsSnapshot, EditableSegment, Health, Job, Segment } from "./api";
-import Timeline from "./Timeline";
+import { api, ENGINE_URL, DownloadsSnapshot, EditableSegment, Health, Job, Segment } from "./api";
 
 const MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "large-v3-turbo-q4"];
 const STEP_LABELS: Record<string, string> = {
@@ -33,7 +32,8 @@ function App() {
     segments: EditableSegment[];
     translations: string[];
   } | null>(null);
-  const [selectedSeg, setSelectedSeg] = useState<number | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const [reexportVariant, setReexportVariant] = useState("bilingual");
   const [reexportEmbed, setReexportEmbed] = useState(false);
   const [error, setError] = useState("");
@@ -82,6 +82,8 @@ function App() {
   }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion, subtitleVariant, saveSrt, embedVideo]);
 
   const loadTranscript = useCallback(async (id: string) => {
+    audioRef.current?.pause();
+    setPlayingIndex(null);
     try {
       const tr = await api.getTranscript(id);
       setEditor({
@@ -93,6 +95,21 @@ function App() {
       setError(String(e));
     }
   }, []);
+
+  const togglePlay = useCallback((i: number) => {
+    const a = audioRef.current;
+    if (!a || !editor) return;
+    if (playingIndex === i) {
+      a.pause();
+      setPlayingIndex(null);
+      return;
+    }
+    const seg = editor.segments[i];
+    if (!seg) return;
+    a.currentTime = seg.start;
+    void a.play();
+    setPlayingIndex(i);
+  }, [editor, playingIndex]);
 
   const saveEdits = useCallback(async () => {
     if (!editor) return;
@@ -343,12 +360,20 @@ function App() {
               <button onClick={doReexport}>重新导出</button>
               <span className="muted">合并/拆分/删除会先自动保存</span>
             </div>
-            <Timeline
-              jobId={editor.job}
-              segments={editor.segments}
-              selectedIndex={selectedSeg}
-              onChange={(i, start, end) => updSeg(i, { start, end })}
-              onSelect={setSelectedSeg}
+            <audio
+              ref={audioRef}
+              src={ENGINE_URL + "/jobs/" + editor.job + "/audio"}
+              preload="auto"
+              style={{ display: "none" }}
+              onTimeUpdate={() => {
+                const a = audioRef.current;
+                if (!a || playingIndex === null) return;
+                const seg = editor.segments[playingIndex];
+                if (seg && a.currentTime >= seg.end - 0.02) {
+                  a.pause();
+                  setPlayingIndex(null);
+                }
+              }}
             />
             <table style={{ marginTop: 10 }}>
               <thead>
@@ -356,7 +381,7 @@ function App() {
               </thead>
               <tbody>
                 {editor.segments.map((s, i) => (
-                  <tr key={i} onClick={() => setSelectedSeg(i)} style={{ cursor: "default" }}>
+                  <tr key={i}>
                     <td>
                       <input
                         type="number"
@@ -392,6 +417,13 @@ function App() {
                       />
                     </td>
                     <td>
+                      <button
+                        style={{ padding: "2px 6px" }}
+                        title="播放该句原声"
+                        onClick={() => togglePlay(i)}
+                      >
+                        {playingIndex === i ? "⏹" : "▶"}
+                      </button>{" "}
                       <button style={{ padding: "2px 6px" }} title="拆分为两条" onClick={() => rowOp("split", i)}>拆</button>{" "}
                       <button style={{ padding: "2px 6px" }} title="与下一条合并" onClick={() => rowOp("merge_next", i)}>并</button>{" "}
                       <button style={{ padding: "2px 6px" }} title="删除此条" onClick={() => rowOp("delete", i)}>删</button>
