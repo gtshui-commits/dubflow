@@ -51,3 +51,26 @@ button:disabled { opacity: 0.5; cursor: default; }
 table { width: 100%; border-collapse: collapse; }
 td, th { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 500; }
+
+details > summary {
+  list-style: revert;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  opacity: 0.4;
+}
+table input[type="text"],
+table input[type="number"] {
+  border-color: transparent;
+  background: transparent;
+}
+table input[type="text"]:hover,
+table input[type="number"]:hover {
+  border-color: var(--border);
+  background: var(--bg);
+}
+table input[type="text"]:focus,
+table input[type="number"]:focus {
+  border-color: var(--accent);
+  background: var(--bg);
+}

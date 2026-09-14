@@ -14,7 +14,7 @@ export interface Health {
 }
 
 export interface StepStatus {
-  status: "pending" | "running" | "done" | "failed" | "skipped";
+  status: "pending" | "queued" | "running" | "done" | "failed" | "skipped";
   progress: number;
   detail: string;
 }
