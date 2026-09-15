@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, DownloadsSnapshot, ENGINE_URL, Health, Job } from "../api";
+import { api, DownloadsSnapshot, EngineSettings, ENGINE_URL, Health, Job } from "../api";
 import { STEP_LABELS } from "../labels";
+import { loadFormPrefs, saveFormPrefs } from "../prefs";
 import DirPicker from "../components/DirPicker";
 import Tooltip from "../components/Tooltip";
 
@@ -31,22 +32,29 @@ interface Props {
 
 export default function HomeView({ jobs, onOpenJob, health }: Props) {
   const modelList = isAppleBackend(health) ? MLX_MODELS : CT2_MODELS;
+  // 上次用过的界面选项（浏览器本地）。翻译配置不放这里，由引擎侧保管。
+  const [savedPrefs] = useState(loadFormPrefs);
   // new-task form
   const [videoPath, setVideoPath] = useState("");
-  const [sourceLang, setSourceLang] = useState("");
-  const [targetLang, setTargetLang] = useState("zh");
-  const [model, setModel] = useState(DEFAULT_CT2_MODEL);
-  const [translate, setTranslate] = useState(false);
-  const [trProvider, setTrProvider] = useState("llm");
+  const [sourceLang, setSourceLang] = useState(savedPrefs.sourceLang ?? "");
+  const [targetLang, setTargetLang] = useState(savedPrefs.targetLang ?? "zh");
+  const [model, setModel] = useState(savedPrefs.model ?? DEFAULT_CT2_MODEL);
+  const [translate, setTranslate] = useState(savedPrefs.translate ?? false);
+  const [trProvider, setTrProvider] = useState(savedPrefs.trProvider ?? "llm");
   const [apiKey, setApiKey] = useState("");
   const [apiBase, setApiBase] = useState("https://api.openai.com/v1");
   const [apiModel, setApiModel] = useState("gpt-4o-mini");
   const [msftKey, setMsftKey] = useState("");
   const [msftRegion, setMsftRegion] = useState("global");
-  const [subtitleVariant, setSubtitleVariant] = useState("bilingual");
-  const [saveSrt, setSaveSrt] = useState(true);
-  const [embedVideo, setEmbedVideo] = useState(false);
-  const [outputDir, setOutputDir] = useState("");
+  // 引擎侧是否已存有密钥。只回掩码 —— 输入框留空即表示沿用已保存的值。
+  const [llmKeySet, setLlmKeySet] = useState(false);
+  const [llmKeyHint, setLlmKeyHint] = useState("");
+  const [msftKeySet, setMsftKeySet] = useState(false);
+  const [msftKeyHint, setMsftKeyHint] = useState("");
+  const [subtitleVariant, setSubtitleVariant] = useState(savedPrefs.subtitleVariant ?? "bilingual");
+  const [saveSrt, setSaveSrt] = useState(savedPrefs.saveSrt ?? true);
+  const [embedVideo, setEmbedVideo] = useState(savedPrefs.embedVideo ?? false);
+  const [outputDir, setOutputDir] = useState(savedPrefs.outputDir ?? "");
   const [pickDir, setPickDir] = useState(false);
   const [formError, setFormError] = useState("");
   const [dl, setDl] = useState<DownloadsSnapshot | null>(null);
@@ -57,14 +65,74 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
     return () => window.clearInterval(t);
   }, []);
 
-  // 后端探测结果回来后，把默认选中项切到该平台真正可用的模型
+  // 记住表单选项：下次打开就是上次的样子
   useEffect(() => {
-    setModel(isAppleBackend(health) ? DEFAULT_MLX_MODEL : DEFAULT_CT2_MODEL);
+    saveFormPrefs({
+      sourceLang, targetLang, model, translate, trProvider,
+      subtitleVariant, saveSrt, embedVideo, outputDir,
+    });
+  }, [sourceLang, targetLang, model, translate, trProvider,
+      subtitleVariant, saveSrt, embedVideo, outputDir]);
+
+  const applySettings = useCallback((s: EngineSettings) => {
+    setApiBase(s.llm.base_url);
+    setApiModel(s.llm.model);
+    setLlmKeySet(s.llm.api_key_set);
+    setLlmKeyHint(s.llm.api_key_hint);
+    setMsftRegion(s.microsoft.region);
+    setMsftKeySet(s.microsoft.key_set);
+    setMsftKeyHint(s.microsoft.key_hint);
+  }, []);
+
+  // 进入页面时拉取引擎侧已保存的翻译配置
+  useEffect(() => {
+    api.getSettings().then(applySettings).catch(() => {});
+  }, [applySettings]);
+
+  // 后端探测结果回来后，把选中项切到该平台真正可用的模型（保留上次的有效选择）
+  useEffect(() => {
+    if (!health?.backend?.name) return;
+    const apple = isAppleBackend(health);
+    const list = apple ? MLX_MODELS : CT2_MODELS;
+    setModel((cur) => (list.includes(cur) ? cur : apple ? DEFAULT_MLX_MODEL : DEFAULT_CT2_MODEL));
   }, [health?.backend?.name]);
+
+  const clearSavedKey = useCallback(async (which: "llm" | "microsoft") => {
+    if (!window.confirm("清除引擎侧已保存的密钥？以后需要重新填写。")) return;
+    try {
+      const s = which === "llm"
+        ? await api.putSettings({ llm: { api_key: "" } })
+        : await api.putSettings({ microsoft: { key: "" } });
+      applySettings(s);
+      if (which === "llm") setApiKey(""); else setMsftKey("");
+    } catch (e) {
+      setFormError(String(e));
+    }
+  }, [applySettings]);
 
   const submit = useCallback(async () => {
     setFormError("");
     try {
+      // 先把翻译配置交给引擎保管（~/.dubflow/settings.json）：
+      // 密钥框留空就是「沿用已保存的」，填了才覆盖；保存成功后立刻清空输入框，
+      // 页面上不再残留明文，下次进来只显示掩码。
+      const persisted = await api.putSettings({
+        llm: {
+          base_url: apiBase,
+          model: apiModel,
+          ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+        },
+        microsoft: {
+          region: msftRegion,
+          ...(msftKey.trim() ? { key: msftKey.trim() } : {}),
+        },
+      }).catch(() => null);
+      if (persisted) {
+        applySettings(persisted);
+        setApiKey("");
+        setMsftKey("");
+      }
+
       await api.createJob({
         video_path: videoPath,
         source_language: sourceLang.trim() || null,
@@ -89,7 +157,7 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
     } catch (e) {
       setFormError(String(e));
     }
-  }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion, subtitleVariant, saveSrt, embedVideo, outputDir]);
+  }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion, subtitleVariant, saveSrt, embedVideo, outputDir, applySettings]);
 
   const stopJob = useCallback(async (id: string) => {
     if (!window.confirm("确定停止该任务？已完成的步骤产物会保留。")) return;
@@ -211,10 +279,26 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
             <Tooltip
               style={{ flex: 1 }}
               side="bottom"
-              text="服务商提供的密钥。注意：它会被明文写进 ~/.dubflow/jobs/<任务号>/job.json，分享该目录前请先清理。"
+              text={
+                llmKeySet
+                  ? `已保存在引擎侧（${llmKeyHint}），此处留空即表示继续使用它。密钥只回掩码，不会以明文出现在页面上。`
+                  : "服务商提供的密钥。填过一次后会被引擎记住，下次打开无需重填。"
+              }
             >
-              <input type="text" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API Key" />
+              <input
+                type="text"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={llmKeySet ? `已保存 ${llmKeyHint} · 留空即用` : "API Key"}
+              />
             </Tooltip>
+            {llmKeySet && (
+              <Tooltip side="bottom" text="清除引擎侧已保存的 API Key，清除后需要重新填写。">
+                <button style={{ padding: "4px 10px" }} onClick={() => clearSavedKey("llm")}>
+                  清除
+                </button>
+              </Tooltip>
+            )}
           </div>
         )}
         {translate && trProvider === "microsoft" && (
@@ -222,9 +306,18 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
             <Tooltip
               style={{ flex: 2 }}
               side="bottom"
-              text="Azure 门户里 Translator 资源的密钥，免费 F0 档即可（每月 200 万字符）。"
+              text={
+                msftKeySet
+                  ? `已保存在引擎侧（${msftKeyHint}），此处留空即表示继续使用它。密钥只回掩码，不会以明文出现在页面上。`
+                  : "Azure 门户里 Translator 资源的密钥，免费 F0 档即可（每月 200 万字符）。填过一次后会被引擎记住。"
+              }
             >
-              <input type="text" value={msftKey} onChange={(e) => setMsftKey(e.target.value)} placeholder="Azure Translator Key（免费 F0 档即可）" />
+              <input
+                type="text"
+                value={msftKey}
+                onChange={(e) => setMsftKey(e.target.value)}
+                placeholder={msftKeySet ? `已保存 ${msftKeyHint} · 留空即用` : "Azure Translator Key（免费 F0 档即可）"}
+              />
             </Tooltip>
             <Tooltip
               style={{ flex: 0, width: 120 }}
@@ -233,6 +326,13 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
             >
               <input type="text" value={msftRegion} onChange={(e) => setMsftRegion(e.target.value)} placeholder="区域，如 global" />
             </Tooltip>
+            {msftKeySet && (
+              <Tooltip side="bottom" text="清除引擎侧已保存的 Azure 密钥，清除后需要重新填写。">
+                <button style={{ padding: "4px 10px" }} onClick={() => clearSavedKey("microsoft")}>
+                  清除
+                </button>
+              </Tooltip>
+            )}
           </div>
         )}
         {translate && trProvider === "google" && (

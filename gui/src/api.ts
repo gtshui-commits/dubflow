@@ -77,6 +77,26 @@ export interface DirListing {
   is_writable: boolean;
 }
 
+// 引擎侧持久化的翻译配置。密钥只回掩码，不回明文：
+// 表单把密钥框留空即表示「沿用已保存的值」，由引擎的 settings 兜底。
+export interface LlmSettings {
+  base_url: string;
+  model: string;
+  api_key_set: boolean;
+  api_key_hint: string;
+}
+
+export interface MsftSettings {
+  region: string;
+  key_set: boolean;
+  key_hint: string;
+}
+
+export interface EngineSettings {
+  llm: LlmSettings;
+  microsoft: MsftSettings;
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(ENGINE_URL + path, {
     method,
@@ -144,6 +164,11 @@ export const api = {
   cancelJob: (id: string) => req<{ ok: boolean }>("POST", `/jobs/${id}/cancel`),
   listDirs: (path?: string) =>
     req<DirListing>("GET", `/fs/dirs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  getSettings: () => req<EngineSettings>("GET", "/settings"),
+  putSettings: (payload: {
+    llm?: { base_url?: string; model?: string; api_key?: string };
+    microsoft?: { key?: string; region?: string };
+  }) => req<EngineSettings>("PUT", "/settings", payload),
   downloads: () => req<DownloadsSnapshot>("GET", "/downloads"),
   downloadModel: (key: string) =>
     req<{ ok: boolean }>("POST", `/downloads/models/${key}`),

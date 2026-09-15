@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,90 @@ from typing import Dict, List, Optional
 
 def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
+
+
+# ---------------------------------------------------------------------------
+# 用户配置持久化（GUI 保存的翻译配置）
+#
+# 取值优先级：**文件 > 环境变量 > 内置默认**。
+# 理由：环境变量面向脚本化/无界面场景做兜底，而 GUI 是用户显式配置的入口，
+# 用户刚保存的值不应该被一个旧的环境变量盖掉。
+# 文件放在 data_dir（默认 ~/.dubflow/settings.json），缺失或损坏时静默回落，
+# 绝不让配置问题导致引擎起不来。
+# ---------------------------------------------------------------------------
+USER_SETTINGS_FILENAME = "settings.json"
+
+# 允许被 GUI 持久化的字段（同时是 Settings 的属性名）
+USER_SETTING_KEYS = frozenset({
+    "translate_base_url",
+    "translate_api_key",
+    "translate_model",
+    "msft_translator_key",
+    "msft_translator_region",
+})
+
+# 环境变量给出的基线值，"清除配置" 时回落到这里
+_ENV_BASELINE: Dict[str, str] = {}
+
+
+def user_settings_path(data_dir: Optional[Path] = None) -> Path:
+    base = data_dir if data_dir is not None else settings.data_dir
+    return base / USER_SETTINGS_FILENAME
+
+
+def read_user_settings(data_dir: Optional[Path] = None) -> Dict[str, str]:
+    """读取 settings.json；任何异常都当作「没有配置」处理。"""
+    try:
+        raw = json.loads(user_settings_path(data_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if k in USER_SETTING_KEYS and isinstance(v, str)}
+
+
+def write_user_settings(values: Dict[str, str], data_dir: Optional[Path] = None) -> None:
+    """整体覆盖写入，先写临时文件再原子替换，避免中途失败留下半个文件。"""
+    path = user_settings_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def update_user_settings(updates: Dict[str, Optional[str]]) -> Dict[str, str]:
+    """按字段更新并立即生效。
+
+    updates 的语义：
+      None → 保持原样（前端没动这个字段）
+      ""   → 清除（回落到环境变量基线）
+      其它 → 覆盖
+    """
+    current = read_user_settings()
+    changed: Dict[str, str] = {}
+    for key, value in updates.items():
+        if key not in USER_SETTING_KEYS:
+            continue
+        if value is None:
+            continue
+        if value == "":
+            current.pop(key, None)
+            setattr(settings, key, _ENV_BASELINE.get(key, ""))
+        else:
+            current[key] = value
+            setattr(settings, key, value)
+            changed[key] = value
+    write_user_settings(current)
+    return current
+
+
+def mask_secret(value: str) -> str:
+    """生成可安全展示的提示串，如 "sk-…1a2b"。绝不返回完整明文。"""
+    if not value:
+        return ""
+    tail = value[-4:]
+    head = value[:3] if len(value) > 7 else ""
+    return f"{head}…{tail}" if head else f"…{tail}"
 
 
 @dataclass
@@ -26,10 +111,11 @@ class Settings:
     @classmethod
     def load(cls) -> "Settings":
         default_data = Path.home() / ".dubflow"
-        return cls(
+        data_dir = Path(_env("DUBFLOW_DATA_DIR", str(default_data))).expanduser()
+        inst = cls(
             host=_env("DUBFLOW_HOST", "127.0.0.1"),
             port=int(_env("DUBFLOW_PORT", "8741")),
-            data_dir=Path(_env("DUBFLOW_DATA_DIR", str(default_data))).expanduser(),
+            data_dir=data_dir,
             models_dir=Path(_env("DUBFLOW_MODELS_DIR", str(Path.home() / ".dubflow" / "models"))).expanduser(),
             hf_endpoint=_env("HF_ENDPOINT", "https://hf-mirror.com"),
             translate_base_url=_env("DUBFLOW_TRANSLATE_BASE_URL", "https://api.openai.com/v1"),
@@ -38,6 +124,12 @@ class Settings:
             msft_translator_key=_env("DUBFLOW_MSFT_TRANSLATOR_KEY", ""),
             msft_translator_region=_env("DUBFLOW_MSFT_TRANSLATOR_REGION", "global"),
         )
+        # 记下环境变量基线，"清除配置" 时回落到它
+        _ENV_BASELINE.update({key: getattr(inst, key) for key in USER_SETTING_KEYS})
+        # GUI 保存过的配置优先级更高
+        for key, value in read_user_settings(data_dir).items():
+            setattr(inst, key, value)
+        return inst
 
 
 settings = Settings.load()
