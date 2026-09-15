@@ -199,7 +199,8 @@ class JobManager:
 
             # 3. ASR (GPU when available; runs in worker thread)
             await self._set_step(job, loop, "asr", "running", 0.02)
-            provider = select_provider(job.asr_options.get("model"))
+            provider = select_provider(job.asr_options.get("model"),
+                                 job.asr_options.get("provider"))
             job.backend = provider.info.to_dict()
             self._persist(job)
             self.hub.publish(job.id, self._snap(job))

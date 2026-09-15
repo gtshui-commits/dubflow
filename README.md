@@ -99,6 +99,19 @@ npm run tauri build   # 打包 .app/.dmg
 
 任务产物落盘于 `data/jobs/<id>/`：`audio.wav` `transcript.json` `source.srt` `<目标语>.srt` `bilingual.srt`，重跑自动跳过已完成步骤。
 
+## 打包分发
+
+```
+scripts/package_engine.sh   # PyInstaller 打包当前平台引擎 -> engine/dist/dubflow-engine
+scripts/build_gui.sh        # GUI 生产构建（需 rustup；引擎二进制放 gui/src-tauri/binaries/）
+.github/workflows/release.yml  # 三平台 CI：tag 推送自动出引擎二进制 + GUI 安装包
+```
+
+NVIDIA GPU 注意：
+- Linux 缺 cuBLAS/cuDNN：`pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`
+- Windows：安装 CUDA Toolkit + cuDNN，DLL 目录加入 PATH
+- 引擎启动自检会在健康检查中报告 CUDA 就绪状态与缺失依赖
+
 ## 路线图
 
 - [x] MVP：导入 → Metal 识别 → 导出 SRT（已验证）

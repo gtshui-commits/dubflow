@@ -11,13 +11,24 @@
   },
   "app": {
     "windows": [
-      { "title": "DubFlow 视频翻译", "width": 1180, "height": 820, "minWidth": 900, "minHeight": 620 }
+      {
+        "title": "DubFlow 视频翻译",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 620
+      }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": [],
+    "externalBin": [
+      "binaries/dubflow-engine"
+    ]
   }
 }

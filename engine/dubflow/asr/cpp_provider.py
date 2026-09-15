@@ -1,31 +1,71 @@
+"""A卡 (AMD) / Intel 显卡方案：whisper.cpp Vulkan 后端。
+
+TODO(MVP2-verify) 三平台后端路线：
+  - MacBook (M 系列):   mlx-whisper (Metal)         -> mlx_provider.py    [已实现+已验证]
+  - NVIDIA (Win/Linux):  faster-whisper (CUDA fp16) -> faster_provider.py [代码就绪, 待真机验证]
+  - AMD/Intel (Win/Linux): whisper.cpp (Vulkan)      -> cpp_provider.py    [本文件, 已实现, 待 A 卡真机验证]
+
+实现方式：调用捆绑/系统安装的 whisper.cpp CLI（whisper-cli），JSON 输出归一化为
+Transcript。Vulkan 构建在无 Vulkan 设备时会自动回退 CPU，因此在任意
+Windows/Linux 机器上均可安全尝试。
+"""
 from __future__ import annotations
 
+import json
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from typing import Optional
 
-from .base import ASRError, ASRProvider, BackendInfo, ProgressFn, Transcript
+from .base import ASRError, ASRProvider, BackendInfo, ProgressFn, Segment, Transcript
+from ..config import settings
+
+DEFAULT_MODEL = "ggml-tiny"
+
+
+def binary_path() -> Optional[Path]:
+    """Bundled bin/whisper-cli-<platform> first, then system whisper-cli."""
+    plat = f"{sys.platform}-{platform.machine()}"
+    ext = ".exe" if sys.platform == "win32" else ""
+    cand = Path(__file__).resolve().parents[2] / "bin" / f"whisper-cli-{plat}{ext}"
+    if cand.is_file():
+        return cand
+    which = shutil.which("whisper-cli")
+    return Path(which) if which else None
 
 
 class WhisperCppProvider(ASRProvider):
-    """A卡 (AMD) / Intel 显卡方案：whisper.cpp Vulkan 后端。
-
-    TODO(MVP2) 三平台后端路线：
-      - MacBook (M 系列):   mlx-whisper (Metal)         -> mlx_provider.py    [已实现]
-      - NVIDIA (Win/Linux):  faster-whisper (CUDA fp16) -> faster_provider.py [代码就绪, 待真机验证]
-      - AMD/Intel (Win/Linux): whisper.cpp (Vulkan)      -> cpp_provider.py    [本文件, 待实现]
-
-    实现要点：
-      1) 按平台捆绑 whisper.cpp 预编译二进制（Vulkan 版），或源码编译
-      2) 通过 pywhispercpp / 子进程调用，输出归一化为 Transcript
-      3) select_provider() 中检测 Vulkan 可用性后启用本 Provider
-    """
-
     name = "whisper.cpp"
 
     def __init__(self, backend: str = "vulkan") -> None:
         super().__init__(BackendInfo(
             name=self.name, device=backend,
-            detail="whisper.cpp binary backend (planned)",
+            detail="whisper.cpp CLI (Vulkan/CUDA/Metal build; auto CPU fallback)",
         ))
+
+    def _binary(self) -> str:
+        p = binary_path()
+        if p:
+            return str(p)
+        raise ASRError(
+            "whisper.cpp CLI 未找到。请通过「模型与依赖」面板或 "
+            "scripts/fetch_ffmpeg.sh 的 whisper.cpp 段落下载对应平台二进制，"
+            "或安装 whisper-cpp 后确保 whisper-cli 在 PATH 中。"
+        )
+
+    def _model_file(self, model_size: Optional[str]) -> str:
+        name = model_size or DEFAULT_MODEL
+        d = settings.models_dir / name
+        if d.is_dir():
+            for f in sorted(d.iterdir()):
+                if f.suffix == ".bin":
+                    return str(f)
+        raise ASRError(
+            f"whisper.cpp 模型 {name} 未下载。请在 GUI「模型与依赖」面板下载。"
+        )
 
     def transcribe(
         self,
@@ -34,7 +74,45 @@ class WhisperCppProvider(ASRProvider):
         model_size: Optional[str] = None,
         progress: ProgressFn = None,
     ) -> Transcript:
-        raise ASRError(
-            "whisper.cpp backend is planned for MVP2 "
-            "(target: AMD GPUs via Vulkan). Use mlx (mac) or faster-whisper for now."
-        )
+        binary = self._binary()
+        model = self._model_file(model_size)
+        if progress:
+            progress(0.05, f"whisper.cpp {Path(model).name}")
+
+        out_dir = Path(tempfile.mkdtemp(prefix="dubflow-wcpp-"))
+        out_prefix = out_dir / "out"
+        cmd = [
+            binary, "-m", model, "-f", str(audio_path),
+            "-l", language or "auto",
+            "-oj", "-of", str(out_prefix),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=7200,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise ASRError("whisper.cpp transcription timed out") from e
+        if proc.returncode != 0:
+            raise ASRError(
+                f"whisper.cpp failed ({proc.returncode}): {proc.stderr[-500:]}"
+            )
+        if progress:
+            progress(0.9, "parsing output")
+
+        json_path = Path(str(out_prefix) + ".json")
+        if not json_path.is_file():
+            raise ASRError("whisper.cpp did not produce JSON output")
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        # whisper.cpp JSON: offsets are in centiseconds
+        segments = [
+            Segment(
+                start=float(item["offsets"]["from"]) / 100.0,
+                end=float(item["offsets"]["to"]) / 100.0,
+                text=str(item.get("text", "")).strip(),
+            )
+            for item in data.get("transcription", [])
+        ]
+        shutil.rmtree(out_dir, ignore_errors=True)
+        if progress:
+            progress(1.0, f"{len(segments)} segments")
+        return Transcript(language=language, segments=segments)

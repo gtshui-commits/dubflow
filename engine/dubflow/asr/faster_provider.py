@@ -45,9 +45,20 @@ class FasterWhisperProvider(ASRProvider):
                 # local dir (downloaded via the GUI model manager) wins over HF hub
                 local = settings.models_dir / model_size
                 target = str(local) if (local / "model.bin").is_file() else model_size
-                self._models[key] = WhisperModel(
-                    target, device=self.device, compute_type=self.compute_type,
-                )
+                try:
+                    self._models[key] = WhisperModel(
+                        target, device=self.device, compute_type=self.compute_type,
+                    )
+                except RuntimeError as e:
+                    msg = str(e).lower()
+                    if "cublas" in msg or "cudnn" in msg:
+                        raise ASRError(
+                            "NVIDIA CUDA 运行库缺失（cuBLAS/cuDNN）。"
+                            "Linux: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12；"
+                            "Windows: 安装 CUDA Toolkit + cuDNN 并将 DLL 目录加入 PATH。"
+                            "详情见 README「NVIDIA GPU」一节。"
+                        ) from e
+                    raise
         return self._models[key]
 
     def transcribe(

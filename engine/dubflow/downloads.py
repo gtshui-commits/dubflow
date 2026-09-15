@@ -27,6 +27,16 @@ from .config import settings
 _MLX_FILES = ["config.json", "weights.npz"]
 _CT2_FILES = ["config.json", "model.bin", "tokenizer.json", "preprocessor_config.json", "vocabulary.json"]
 
+# whisper.cpp ggml models live in the huge ggerganov/whisper.cpp repo;
+# skip tree listing and download the single model file directly.
+_WCPP_FILES = {
+    "ggml-tiny": ["ggml-tiny.bin"],
+    "ggml-base": ["ggml-base.bin"],
+    "ggml-small": ["ggml-small.bin"],
+    "ggml-large-v3-turbo-q5_0": ["ggml-large-v3-turbo-q5_0.bin"],
+}
+_WCPP_SOURCES = [("hf-mirror", "ggerganov/whisper.cpp")]
+
 def _ms(repo: str) -> tuple:
     return ("modelscope", repo)
 
@@ -50,6 +60,11 @@ CATALOG: Dict[str, Dict[str, Any]] = {
                                 "sources": [_ms("Systran/faster-whisper-base"), _hfm("Systran/faster-whisper-base")]},
     "faster-whisper-large-v3": {"backend": "ctranslate2", "files": _CT2_FILES,
                                 "sources": [_ms("Systran/faster-whisper-large-v3"), _hfm("Systran/faster-whisper-large-v3")]},
+    # whisper.cpp ggml models (AMD/Intel Vulkan backend; also runs on any CPU)
+    "ggml-tiny":      {"backend": "whisper.cpp", "files": _WCPP_FILES["ggml-tiny"], "sources": _WCPP_SOURCES, "skip_tree": True},
+    "ggml-base":      {"backend": "whisper.cpp", "files": _WCPP_FILES["ggml-base"], "sources": _WCPP_SOURCES, "skip_tree": True},
+    "ggml-small":     {"backend": "whisper.cpp", "files": _WCPP_FILES["ggml-small"], "sources": _WCPP_SOURCES, "skip_tree": True},
+    "ggml-large-v3-turbo-q5_0": {"backend": "whisper.cpp", "files": _WCPP_FILES["ggml-large-v3-turbo-q5_0"], "sources": _WCPP_SOURCES, "skip_tree": True},
 }
 
 _SKIP_FILES = {"README.md", "configuration.json", ".gitattributes"}
@@ -163,14 +178,19 @@ def _download_model_sync(key: str, entry: Dict[str, Any]) -> None:
     dest = _model_dir(key)
     dest.mkdir(parents=True, exist_ok=True)
     files, used = None, None
+    if entry.get("skip_tree"):
+        # explicit file list (huge repos like ggerganov/whisper.cpp)
+        files = [(f, 0) for f in entry.get("files", [])]
+        used = entry["sources"][0]
     with httpx.Client(timeout=120, trust_env=True, follow_redirects=True) as client:
-        for source in entry["sources"]:
-            try:
-                files = _list_source_files(source, client)
-                used = source
-                break
-            except Exception as e:  # noqa: BLE001
-                _set(f"model:{key}", detail=f"source {source[0]} unavailable: {e}")
+        if files is None:
+            for source in entry["sources"]:
+                try:
+                    files = _list_source_files(source, client)
+                    used = source
+                    break
+                except Exception as e:  # noqa: BLE001
+                    _set(f"model:{key}", detail=f"source {source[0]} unavailable: {e}")
         if not files or used is None:
             raise RuntimeError("all download sources failed (file list)")
 

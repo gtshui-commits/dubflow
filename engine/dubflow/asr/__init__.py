@@ -10,15 +10,39 @@ from .base import ASRProvider, ASRError
 log = logging.getLogger(__name__)
 
 
+_mlx_probe: Optional[bool] = None
+
+
 def _mlx_available() -> bool:
-    if sys.platform != "darwin" or platform.machine() != "arm64":
-        return False
+    """Probe MLX in a child process: importing mlx can HARD-ABORT the process
+    (native NSException) on machines without enumerable Metal devices (CI,
+    restricted sandboxes). A subprocess crash then just means 'unavailable'
+    instead of taking the whole engine down."""
+    global _mlx_probe
+    if _mlx_probe is None:
+        if sys.platform != "darwin" or platform.machine() != "arm64":
+            _mlx_probe = False
+        else:
+            try:
+                import subprocess
+                r = subprocess.run(
+                    [sys.executable, "-c", "import mlx.core"],
+                    capture_output=True, timeout=60,
+                )
+                _mlx_probe = r.returncode == 0
+            except Exception:  # pragma: no cover
+                _mlx_probe = False
+            if not _mlx_probe:
+                log.warning("mlx probe failed - Metal backend disabled")
+    return _mlx_probe
+
+
+def _cuda_device_count() -> int:
     try:
-        import mlx.core  # noqa: F401
-        return True
-    except Exception as e:  # pragma: no cover
-        log.info("mlx unavailable: %s", e)
-        return False
+        import ctranslate2  # type: ignore
+        return ctranslate2.get_cuda_device_count()
+    except Exception:
+        return 0
 
 
 def _cuda_available() -> bool:
@@ -27,6 +51,11 @@ def _cuda_available() -> bool:
         return ctranslate2.get_cuda_device_count() > 0
     except Exception:
         return False
+
+
+def _whisper_cpp_available() -> bool:
+    from .cpp_provider import binary_path
+    return binary_path() is not None
 
 
 def _faster_whisper_available() -> bool:
@@ -49,7 +78,12 @@ def describe_backend() -> dict:
         return {"name": "none", "device": "none",
                 "detail": "macOS requires Metal GPU backend (pip install mlx-whisper)"}
     if _cuda_available():
-        return {"name": "faster-whisper", "device": "cuda", "detail": "NVIDIA GPU via CTranslate2"}
+        n = _cuda_device_count()
+        return {"name": "faster-whisper", "device": "cuda",
+                "detail": f"NVIDIA GPU via CTranslate2 ({n} device(s))"}
+    if _whisper_cpp_available():
+        return {"name": "whisper.cpp", "device": "vulkan",
+                "detail": "AMD/Intel GPU via whisper.cpp Vulkan (auto CPU fallback)"}
     if _faster_whisper_available():
         return {"name": "faster-whisper", "device": "cpu", "detail": "CPU int8 fallback (non-mac)"}
     return {"name": "none", "device": "none", "detail": "no ASR backend installed"}
@@ -64,12 +98,27 @@ def describe_backend() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def select_provider(model_size: Optional[str] = None) -> ASRProvider:
+def select_provider(model_size: Optional[str] = None,
+                    preferred: Optional[str] = None) -> ASRProvider:
+    """preferred: auto | mlx-whisper | faster-whisper | whisper.cpp.
+    An explicit (non-auto) provider is required to be available, else error."""
     """Auto-select the fastest available backend for this machine.
 
     Policy: macOS (Apple Silicon) is Metal-GPU-only - every Mac has Metal, so
     there is deliberately NO CPU fallback there. Windows/Linux use CUDA when an
     NVIDIA GPU is present, CPU int8 otherwise (Vulkan/whisper.cpp planned)."""
+    if preferred in ("mlx-whisper", "faster-whisper", "whisper.cpp"):
+        if preferred == "mlx-whisper" and _is_apple_silicon() and _mlx_available():
+            from .mlx_provider import MLXWhisperProvider
+            return MLXWhisperProvider()
+        if preferred == "faster-whisper" and _faster_whisper_available():
+            from .faster_provider import FasterWhisperProvider
+            dev, ct = ("cuda", "float16") if _cuda_available() else ("cpu", "int8")
+            return FasterWhisperProvider(device=dev, compute_type=ct)
+        if preferred == "whisper.cpp" and _whisper_cpp_available():
+            from .cpp_provider import WhisperCppProvider
+            return WhisperCppProvider(backend="vulkan")
+        raise ASRError(f"指定的识别后端 {preferred} 在当前机器不可用")
     if _is_apple_silicon():
         if _mlx_available():
             from .mlx_provider import MLXWhisperProvider
@@ -81,6 +130,11 @@ def select_provider(model_size: Optional[str] = None) -> ASRProvider:
     if _cuda_available():
         from .faster_provider import FasterWhisperProvider
         return FasterWhisperProvider(device="cuda", compute_type="float16")
+    # TODO(platform-amd): Vulkan 路线未在真实 A 卡上验证（Windows/Linux 均可尝试，
+    # whisper.cpp Vulkan 构建在无 Vulkan 设备时自动回退 CPU，可安全尝试）
+    if _whisper_cpp_available():
+        from .cpp_provider import WhisperCppProvider
+        return WhisperCppProvider(backend="vulkan")
     if _faster_whisper_available():
         from .faster_provider import FasterWhisperProvider
         return FasterWhisperProvider(device="cpu", compute_type="int8")
