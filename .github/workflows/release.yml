@@ -13,67 +13,99 @@ jobs:
     strategy:
       matrix:
         include:
-          - { os: macos-14,   target: aarch64-apple-darwin,  py: "3.12" }
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, py: "3.12" }
-          - { os: windows-2022, target: x86_64-pc-windows-msvc, py: "3.12" }
+          - os: macos-14
+            target: aarch64-apple-darwin
+            mlx: true
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            mlx: false
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            mlx: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: { python-version: "${{ matrix.py }}" }
+        with:
+          python-version: "3.12"
+
       - name: Install engine deps
         working-directory: engine
         run: |
           python -m pip install -U pip
           pip install -r requirements.txt pyinstaller
-      # NVIDIA CUDA runtime wheels (cuBLAS/cuDNN) - only meaningful on win/linux
+
       - name: Install NVIDIA runtime wheels
         if: runner.os != 'macOS'
         working-directory: engine
         run: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 || true
+
       - name: Package engine (PyInstaller)
         working-directory: engine
-        run: pyinstaller --name dubflow-engine --onefile --collect-all uvicorn --collect-all mlx_whisper --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on main.py
-        continue-on-error: true   # mlx/mac needs extra hooks; see README packaging notes
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "${{ matrix.mlx }}" = "true" ]; then
+            EXTRA="--collect-all mlx --collect-all mlx_whisper"
+          fi
+          pyinstaller --name dubflow-engine --onefile \
+            --collect-all uvicorn \
+            $EXTRA \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan.on \
+            run_engine.py
+        continue-on-error: true
+
       - uses: actions/upload-artifact@v4
         with:
           name: engine-${{ matrix.target }}
-          path: |
-            engine/dist/dubflow-engine*
-            engine/dist/dubflow-engine/**
+          path: engine/dist/dubflow-engine*
 
   gui:
     needs: engine
     strategy:
       matrix:
         include:
-          - { os: macos-14,     target: aarch64-apple-darwin }
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
-          - { os: windows-2022, target: x86_64-pc-windows-msvc }
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with:
+          node-version: 22
+
       - uses: dtolnay/rust-toolchain@stable
-      - name: Download engine artifact
-        uses: actions/download-artifact@v4
-        with: { name: engine-${{ matrix.target }}, path: engine-dist }
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: engine-dist
+
       - name: Place engine sidecar
         shell: bash
         run: |
           mkdir -p gui/src-tauri/binaries
-          # find the engine binary (file on unix, dir fallback documented)
           find engine-dist -type f -name "dubflow-engine*" -exec cp {} gui/src-tauri/binaries/ \; || true
-          ls gui/src-tauri/binaries || true
+          ls -la gui/src-tauri/binaries || true
+
       - name: Build GUI (vite + tauri)
         working-directory: gui
         run: |
           npm install
           npm run build
-          npm run tauri build || echo "tauri build needs rust env tuning - see README"
+          npm run tauri build
+
       - uses: actions/upload-artifact@v4
         with:
           name: gui-${{ matrix.target }}
-          path: |
-            gui/src-tauri/target/release/bundle/**
+          path: gui/src-tauri/target/release/bundle/**
