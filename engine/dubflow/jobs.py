@@ -122,6 +122,18 @@ class JobManager:
     def request_cancel(self, job: Job) -> None:
         job.cancel_requested = True
 
+    def delete(self, job_id: str) -> None:
+        self._jobs.pop(job_id, None)
+        self.tasks.pop(job_id, None)
+        shutil.rmtree(self.job_dir(job_id), ignore_errors=True)
+
+    def clear_failed(self) -> int:
+        dead = [j for j in self._jobs.values()
+                if j.status in ("failed", "cancelled")]
+        for j in dead:
+            self.delete(j.id)
+        return len(dead)
+
     def job_dir(self, job_id: str) -> Path:
         return settings.data_dir / "jobs" / job_id
 

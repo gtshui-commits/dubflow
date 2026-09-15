@@ -91,6 +91,9 @@ npm run tauri build   # 打包 .app/.dmg
 | GET | /jobs/:id/transcript | 识别结果（段落+时间轴） |
 | POST | /jobs/:id/cancel | 请求取消（步骤间生效） |
 | WS | /ws/jobs/:id | 实时进度事件 |
+| DELETE | /jobs/:id | 删除任务及中间产物（进行中不可删） |
+| POST | /jobs/clear-failed | 一键清除全部失败/已取消任务 |
+| GET | /downloads, POST /downloads/models/:key, /downloads/ffmpeg | 模型目录/下载进度/一键下载 |
 | GET/POST | /downloads, /downloads/models/:key, /downloads/ffmpeg | 模型目录/下载进度/一键下载捆绑 ffmpeg |
 | PUT/POST | /jobs/:id/transcript, /jobs/:id/segments/:i/{split,merge_next,delete}, /jobs/:id/export | 字幕编辑器（改文本/时间、拆分/合并/删除）+ 按选项重新导出 |
 

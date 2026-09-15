@@ -129,4 +129,6 @@ export const api = {
   downloadModel: (key: string) =>
     req<{ ok: boolean }>("POST", `/downloads/models/${key}`),
   downloadFfmpeg: () => req<{ ok: boolean }>("POST", "/downloads/ffmpeg"),
+  deleteJob: (id: string) => req<{ ok: boolean }>("DELETE", `/jobs/${id}`),
+  clearFailed: () => req<{ ok: boolean; removed: number }>("POST", "/jobs/clear-failed"),
 };

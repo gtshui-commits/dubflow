@@ -62,6 +62,26 @@ export default function HomeView({ jobs, onOpenJob }: Props) {
     }
   }, [videoPath, sourceLang, targetLang, model, translate, trProvider, apiKey, apiBase, apiModel, msftKey, msftRegion, subtitleVariant, saveSrt, embedVideo]);
 
+  const removeJob = useCallback(async (id: string) => {
+    if (!window.confirm("确定删除该任务？其转写/字幕等中间产物将一并清除。")) return;
+    try {
+      await api.deleteJob(id);
+    } catch (e) {
+      setFormError(String(e));
+    }
+  }, []);
+
+  const clearFailed = useCallback(async () => {
+    if (!window.confirm("确定清除全部失败/已取消的任务？")) return;
+    try {
+      await api.clearFailed();
+    } catch (e) {
+      setFormError(String(e));
+    }
+  }, []);
+
+  const failedCount = jobs.filter((j) => j.status === "failed" || j.status === "cancelled").length;
+
   const overall = (j: Job) => {
     const vals = Object.values(j.steps);
     const done = vals.filter((s) => s.status === "done" || s.status === "skipped").length;
@@ -170,7 +190,14 @@ export default function HomeView({ jobs, onOpenJob }: Props) {
         </div>
       </div>
 
-      <h2>任务列表</h2>
+      <div className="row" style={{ justifyContent: "space-between", margin: "18px 0 8px" }}>
+        <h2 style={{ margin: 0 }}>任务列表</h2>
+        {failedCount > 0 && (
+          <button style={{ padding: "2px 10px" }} onClick={clearFailed}>
+            清除失败任务（{failedCount}）
+          </button>
+        )}
+      </div>
       <div className="panel">
         {jobs.length === 0 && <span className="muted">暂无任务</span>}
         {jobs.map((j) => {
@@ -195,14 +222,24 @@ export default function HomeView({ jobs, onOpenJob }: Props) {
                 {j.backend && "name" in j.backend && (
                   <span className="step">{j.backend.name}/{j.backend.device}</span>
                 )}
+                <span style={{ marginLeft: "auto" }} />
                 <button
-                  style={{ marginLeft: "auto", padding: "2px 10px" }}
+                  style={{ padding: "2px 10px" }}
                   disabled={!canEdit}
                   title={canEdit ? "打开字幕工作台" : "转写完成后可编辑"}
                   onClick={() => onOpenJob(j.id)}
                 >
                   编辑字幕
                 </button>
+                {(j.status === "failed" || j.status === "cancelled") && (
+                  <button
+                    style={{ padding: "2px 10px" }}
+                    title="删除任务及中间产物"
+                    onClick={() => removeJob(j.id)}
+                  >
+                    删除
+                  </button>
+                )}
               </div>
               <div className="bar"><div style={{ width: `${pct}%` }} /></div>
               {j.error && <div className="error">{j.error}</div>}

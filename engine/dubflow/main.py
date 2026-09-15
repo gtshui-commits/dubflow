@@ -198,6 +198,22 @@ async def cancel_job(job_id: str) -> dict:
     return {"ok": True}
 
 
+@app.delete("/jobs/{job_id}")
+async def delete_job(job_id: str) -> dict:
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status in ("queued", "running"):
+        raise HTTPException(status_code=409, detail="任务进行中，无法删除（可先取消）")
+    manager.delete(job_id)
+    return {"ok": True}
+
+
+@app.post("/jobs/clear-failed")
+async def clear_failed_jobs() -> dict:
+    return {"ok": True, "removed": manager.clear_failed()}
+
+
 @app.get("/downloads")
 async def downloads() -> dict:
     return downloads_snapshot()
