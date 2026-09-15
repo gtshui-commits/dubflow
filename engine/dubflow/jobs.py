@@ -286,6 +286,13 @@ class JobManager:
             log.exception("job %s failed", job.id)
             job.status = "failed"
             job.error = f"{type(e).__name__}: {e}"
+            # 把当时还在 running 的步骤一并标成 failed。
+            # 否则它会永远停在 running，界面上同时出现「任务失败」和
+            # 「语音识别·running 5%」两个互相矛盾的状态。
+            for step in job.steps.values():
+                if step.status == "running":
+                    step.status = "failed"
+                    step.detail = job.error
             self.hub.publish(job.id, self._snap(job, "failed"))
             self._persist(job)
 

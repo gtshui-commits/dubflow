@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 def _env(key: str, default: str = "") -> str:
@@ -56,10 +56,13 @@ os.environ.setdefault("HF_ENDPOINT", settings.hf_endpoint)
 # ---------------------------------------------------------------------------
 # 本地模型目录解析
 #
-# 下载器（downloads.CATALOG）落盘用的是它自己的键名，例如 "faster-whisper-base"；
-# 而引擎在识别时收到的是 GUI 传来的别名，例如 "base"。两者对不上会导致
-# 「模型明明下载好了，引擎却当本地不存在，转而去 HF 重下一遍」。
-# 这里统一解析，三种命名都认：别名 / 下载器键名 / 带前缀的仓库短名。
+# 同一个模型在工程里有两种命名，而且两个方向都会出现：
+#   * 下载器（downloads.CATALOG）落盘时用键名，例如 "faster-whisper-base"，
+#     它同时也是 models_dir 下的目录名，GUI 的 ctranslate2 下拉框也发这个名字；
+#   * 而 faster-whisper 自己只认短名 "base" / "large-v3-turbo"。
+# 早期实现只做了「短名 → 补前缀」这一个方向，于是下载器下好的模型（目录名带前缀）
+# 引擎反而找不到，最后把 "faster-whisper-base" 原样交给 WhisperModel()，
+# 直接抛 ValueError: Invalid model size。现在两个方向都认。
 # ---------------------------------------------------------------------------
 _MODEL_DIR_ALIASES: Dict[str, str] = {
     "tiny": "faster-whisper-tiny",
@@ -71,15 +74,73 @@ _MODEL_DIR_ALIASES: Dict[str, str] = {
     "turbo": "faster-whisper-large-v3-turbo",
 }
 
+# 下载器键名前缀（CATALOG 的键 = models_dir 下的目录名）
+_CT2_MODEL_PREFIX = "faster-whisper-"
+
+
+def canonical_model_name(model_size: str) -> str:
+    """把下载器键名归一成 faster-whisper 认得的模型名。
+
+    本地找不到模型目录时，这个名字会被交给 WhisperModel() 由它去 HF 拉取。
+    而 WhisperModel 的白名单里是 "base" / "large-v3-turbo" 这类短名，
+    传 "faster-whisper-base" 会直接抛 ValueError，所以必须剥掉前缀。
+    """
+    if model_size.startswith(_CT2_MODEL_PREFIX):
+        stripped = model_size[len(_CT2_MODEL_PREFIX):]
+        if stripped:
+            return stripped
+    return model_size
+
+
+# 反向索引：下载器键名 -> 指向它的所有短名
+# 例：faster-whisper-large-v3-turbo -> ["large-v3-turbo", "turbo"]
+# faster-whisper 把 turbo 和 large-v3-turbo 视为同一模型，目录名可能落在任一侧，
+# 所以解析时要顺着这层关系一起展开，否则 "turbo" 会漏掉名为 large-v3-turbo 的目录。
+_SHORT_OF: Dict[str, List[str]] = {}
+for _short_name, _prefixed_name in _MODEL_DIR_ALIASES.items():
+    _SHORT_OF.setdefault(_prefixed_name, []).append(_short_name)
+
+
+def _model_dir_candidates(model_size: str) -> List[str]:
+    """枚举该模型在 models_dir 下所有可能的目录名（去重并保持顺序）。"""
+    names: List[str] = []
+
+    def add(name: str) -> bool:
+        if name and name not in names:
+            names.append(name)
+            return True
+        return False
+
+    add(model_size)
+    short = canonical_model_name(model_size)
+    if short == model_size:
+        # 输入是短名 → 顺带试下载器键名
+        add(f"{_CT2_MODEL_PREFIX}{model_size}")
+    else:
+        # 输入是下载器键名 → 顺带试剥掉前缀的短名
+        add(short)
+
+    # 别名组内互相展开（收敛性由候选集有限保证）
+    changed = True
+    while changed:
+        changed = False
+        for name in list(names):
+            for linked in (_MODEL_DIR_ALIASES.get(name), *_SHORT_OF.get(name, [])):
+                if add(linked):
+                    changed = True
+
+    return names
+
 
 def resolve_model_dir(model_size: str) -> Optional[Path]:
     """返回本地已就绪的模型目录（要求内含 model.bin），没有则返回 None。"""
-    names = [model_size]
-    alias = _MODEL_DIR_ALIASES.get(model_size)
-    if alias:
-        names.append(alias)
-    names.append(f"faster-whisper-{model_size}")
-    for name in dict.fromkeys(names):
+    # 也允许直接传目录路径，方便手工指定模型
+    direct = Path(model_size).expanduser()
+    if (direct.is_absolute() or os.sep in model_size or "/" in model_size) \
+            and (direct / "model.bin").is_file():
+        return direct
+
+    for name in _model_dir_candidates(model_size):
         candidate = settings.models_dir / name
         if (candidate / "model.bin").is_file():
             return candidate
