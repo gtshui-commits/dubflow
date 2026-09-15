@@ -52,7 +52,8 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
   const [msftKeySet, setMsftKeySet] = useState(false);
   const [msftKeyHint, setMsftKeyHint] = useState("");
   const [subtitleVariant, setSubtitleVariant] = useState(savedPrefs.subtitleVariant ?? "bilingual");
-  const [saveSrt, setSaveSrt] = useState(savedPrefs.saveSrt ?? true);
+  // 默认不勾：不勾就什么都不落盘，要落盘得自己勾 —— 与直觉一致
+  const [saveSrt, setSaveSrt] = useState(savedPrefs.saveSrt ?? false);
   const [embedVideo, setEmbedVideo] = useState(savedPrefs.embedVideo ?? false);
   const [outputDir, setOutputDir] = useState(savedPrefs.outputDir ?? "");
   const [pickDir, setPickDir] = useState(false);
@@ -149,7 +150,10 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
         },
         export: {
           variant: subtitleVariant,
-          save_to_video_folder: saveSrt || embedVideo,
+          // 必须原样透传复选框状态。这里原来写的是 `saveSrt || embedVideo`，
+          // 于是勾着「烧录」时即使取消勾选「保存字幕文件」，发出去的仍是 true ——
+          // 复选框形同虚设，引擎会照旧把 .srt 交付出去。
+          save_to_video_folder: saveSrt,
           embed_video: embedVideo,
           output_dir: outputDir.trim() || null,
         },
@@ -349,7 +353,7 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
               <option value="source">仅原文</option>
             </select>
           </Tooltip>
-          <Tooltip text="把生成的字幕文件复制一份到输出目录，视频本身不动。" side="bottom">
+          <Tooltip text="勾选后会把字幕文件复制一份到输出目录，视频本身不动。不勾则不落任何字幕文件。" side="bottom">
             <label className="row" style={{ gap: 4 }}>
               <input
                 type="checkbox"
@@ -360,16 +364,13 @@ export default function HomeView({ jobs, onOpenJob, health }: Props) {
               <span className="muted">保存字幕文件</span>
             </label>
           </Tooltip>
-          <Tooltip text="用 ffmpeg 把字幕烧进画面，生成一个新视频。需要重新编码，比较耗时；勾选后会自动打开「保存字幕文件」。" side="bottom">
+          <Tooltip text="用 ffmpeg 把字幕烧进画面，生成一个新视频。需要重新编码，比较耗时。它与「保存字幕文件」互不影响：只要这份烧录视频，就不必勾保存字幕。" side="bottom">
             <label className="row" style={{ gap: 4 }}>
               <input
                 type="checkbox"
                 style={{ width: "auto" }}
                 checked={embedVideo}
-                onChange={(e) => {
-                  setEmbedVideo(e.target.checked);
-                  if (e.target.checked) setSaveSrt(true);
-                }}
+                onChange={(e) => setEmbedVideo(e.target.checked)}
               />
               <span className="muted">烧录硬字幕生成新视频</span>
             </label>

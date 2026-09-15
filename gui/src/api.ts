@@ -29,6 +29,14 @@ export interface Job {
   error: string | null;
   artifacts: Record<string, string>;
   backend: BackendInfo | Record<string, never>;
+  created_at?: number;
+  // 引擎回显的导出选择，工作台用它作为「重新导出」的默认值
+  export_options?: {
+    variant?: string;
+    save_to_video_folder?: boolean;
+    embed_video?: boolean;
+    output_dir?: string | null;
+  };
 }
 
 
