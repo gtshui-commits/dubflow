@@ -145,7 +145,7 @@ jobs:
             -exec cp {} release/ \;
           ls -la release
       - name: Attach to GitHub Release
-        uses: softprops/action-ghrelease@v2
+        uses: softprops/action-ghrelease@
         with:
           files: release/*
           generate_release_notes: true
