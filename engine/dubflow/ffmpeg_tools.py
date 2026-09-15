@@ -6,11 +6,51 @@ import platform
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 class FFmpegError(RuntimeError):
     pass
+
+
+def _arch_tag() -> str:
+    """归一化 CPU 架构标签。
+
+    platform.machine() 在 Windows 上返回 "AMD64"，而 scripts/fetch_ffmpeg.sh
+    与 CI 产物一律用 "x86_64" 命名。两边不一致会导致「下载成功却找不到」，
+    ffmpeg_status() 永远报未安装。
+    """
+    machine = platform.machine().lower()
+    return {"amd64": "x86_64", "x64": "x86_64", "aarch64": "arm64"}.get(machine, machine)
+
+
+def plat_tag() -> str:
+    """当前平台标签，例如 win32-x86_64 / darwin-arm64 / linux-x86_64。"""
+    return f"{sys.platform}-{_arch_tag()}"
+
+
+def bundled_candidates(binary: str) -> List[Path]:
+    """bin/ 下所有可能的捆绑二进制路径，按优先级排列。
+
+    除当前平台的规范名外，还兼容历史命名（直接拿 platform.machine() 存的产物）
+    和去标签的通用名，避免旧版本下载的文件被误判为「未安装」。
+    """
+    ext = ".exe" if sys.platform == "win32" else ""
+    bin_dir = Path(__file__).resolve().parents[2] / "bin"
+    names = [
+        f"{binary}-{plat_tag()}{ext}",
+        f"{binary}-{sys.platform}-{platform.machine()}{ext}",
+        f"{binary}{ext}",
+    ]
+    return [bin_dir / n for n in dict.fromkeys(names)]   # 去重且保持顺序
+
+
+def bundled(binary: str) -> "Path | None":
+    """返回第一个实际存在的捆绑二进制，都不存在则返回 None。"""
+    for candidate in bundled_candidates(binary):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _require(binary: str) -> str:
@@ -18,12 +58,9 @@ def _require(binary: str) -> str:
 
     Bundled naming: ffmpeg-darwin-arm64, ffmpeg-win32-x86_64.exe,
     ffmpeg-linux-x86_64, ... (see scripts/fetch_ffmpeg.sh)."""
-    if binary in ("ffmpeg", "ffprobe"):
-        plat = f"{sys.platform}-{platform.machine()}"
-        ext = ".exe" if sys.platform == "win32" else ""
-        candidate = Path(__file__).resolve().parents[2] / "bin" / f"{binary}-{plat}{ext}"
-        if candidate.is_file():
-            return str(candidate)
+    found = bundled(binary)
+    if found is not None:
+        return str(found)
     path = shutil.which(binary)
     if not path:
         raise FFmpegError(f"'{binary}' not found in project bin/ or PATH")
@@ -110,17 +147,29 @@ async def burn_subtitles(video_path: str, srt_path: str, out_path: str,
         return (await proc.stderr.read()).decode(errors="replace") if proc.stderr else ""
     stderr_task = asyncio.create_task(drain_stderr())
     assert proc.stdout is not None
-    async for raw in proc.stdout:
-        line = raw.decode(errors="replace").strip()
-        if line.startswith("out_time=") and duration:
+    try:
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace").strip()
+            if line.startswith("out_time=") and duration:
+                try:
+                    h, m, s = line.split("=", 1)[1].split(":")
+                    t = int(h) * 3600 + int(m) * 60 + float(s)
+                    if progress:
+                        progress(min(t / duration, 1.0), f"burning {int(t)}/{int(duration)}s")
+                except (ValueError, IndexError):
+                    pass
+        await proc.wait()
+        err = await stderr_task
+    except BaseException:
+        # 被取消（用户点了停止）时必须收掉 ffmpeg，否则会留下孤儿进程
+        # 继续占用 CPU 往临时文件里写。
+        if proc.returncode is None:
+            proc.kill()
             try:
-                h, m, s = line.split("=", 1)[1].split(":")
-                t = int(h) * 3600 + int(m) * 60 + float(s)
-                if progress:
-                    progress(min(t / duration, 1.0), f"burning {int(t)}/{int(duration)}s")
-            except (ValueError, IndexError):
+                await proc.wait()
+            except Exception:
                 pass
-    await proc.wait()
-    err = await stderr_task
+        stderr_task.cancel()
+        raise
     if proc.returncode != 0:
         raise FFmpegError(f"burn subtitles failed: {err[-800:]}")

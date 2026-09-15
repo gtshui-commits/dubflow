@@ -16,6 +16,7 @@ from typing import Any, Dict
 import httpx
 
 from .config import settings
+from .ffmpeg_tools import bundled, plat_tag
 
 # ---------------------------------------------------------------------------
 # Model catalog. Each entry has a SOURCE CHAIN, tried in order:
@@ -58,8 +59,17 @@ CATALOG: Dict[str, Dict[str, Any]] = {
                                 "sources": [_ms("Systran/faster-whisper-tiny"), _hfm("Systran/faster-whisper-tiny")]},
     "faster-whisper-base":     {"backend": "ctranslate2", "files": _CT2_FILES,
                                 "sources": [_ms("Systran/faster-whisper-base"), _hfm("Systran/faster-whisper-base")]},
+    "faster-whisper-small":    {"backend": "ctranslate2", "files": _CT2_FILES,
+                                "sources": [_ms("Systran/faster-whisper-small"), _hfm("Systran/faster-whisper-small")]},
+    "faster-whisper-medium":   {"backend": "ctranslate2", "files": _CT2_FILES,
+                                "sources": [_ms("Systran/faster-whisper-medium"), _hfm("Systran/faster-whisper-medium")]},
     "faster-whisper-large-v3": {"backend": "ctranslate2", "files": _CT2_FILES,
                                 "sources": [_ms("Systran/faster-whisper-large-v3"), _hfm("Systran/faster-whisper-large-v3")]},
+    # large-v3-turbo 没有 Systran 版；这里用 faster-whisper 官方映射的仓库
+    # (见 faster_whisper/utils.py 的 _MODELS)，ModelScope 与 HF 镜像都有。
+    "faster-whisper-large-v3-turbo": {"backend": "ctranslate2", "files": _CT2_FILES,
+                                "sources": [_ms("mobiuslabsgmbh/faster-whisper-large-v3-turbo"),
+                                            _hfm("mobiuslabsgmbh/faster-whisper-large-v3-turbo")]},
     # whisper.cpp ggml models (AMD/Intel Vulkan backend; also runs on any CPU)
     "ggml-tiny":      {"backend": "whisper.cpp", "files": _WCPP_FILES["ggml-tiny"], "sources": _WCPP_SOURCES, "skip_tree": True},
     "ggml-base":      {"backend": "whisper.cpp", "files": _WCPP_FILES["ggml-base"], "sources": _WCPP_SOURCES, "skip_tree": True},
@@ -98,15 +108,8 @@ def _existing_model_dir(key: str, repo: str) -> Path | None:
     return None
 
 
-def _bundled(binary: str) -> Optional[Path]:
-    plat = f"{sys.platform}-{platform.machine()}"
-    ext = ".exe" if sys.platform == "win32" else ""
-    cand = _BIN_DIR / f"{binary}-{plat}{ext}"
-    return cand if cand.is_file() else None
-
-
 def ffmpeg_status() -> dict:
-    ff, fp = _bundled("ffmpeg"), _bundled("ffprobe")
+    ff, fp = bundled("ffmpeg"), bundled("ffprobe")
     return {
         "installed": bool(ff and fp),
         "ffmpeg": str(ff) if ff else None,
@@ -252,7 +255,7 @@ def start_model_download(key: str) -> dict:
 def _download_ffmpeg_sync() -> None:
     bin_dir = _BIN_DIR
     bin_dir.mkdir(parents=True, exist_ok=True)
-    plat_tag = f"{sys.platform}-{platform.machine()}"
+    tag = plat_tag()        # 归一化平台标签，与 scripts/fetch_ffmpeg.sh 保持一致
     ext = ".exe" if sys.platform == "win32" else ""
     client = httpx.Client(timeout=300, trust_env=True, follow_redirects=True)
     tmp = Path(settings.data_dir) / "ffmpeg_dl"
@@ -296,7 +299,7 @@ def _download_ffmpeg_sync() -> None:
             a = tmp / f"dl{i}.zip"
             fetch(url, a)
             got = extract(a, name)
-            target = bin_dir / f"{name}-{plat_tag}"
+            target = bin_dir / f"{name}-{tag}"
             shutil.copy2(got, target)
             target.chmod(0o755)
     elif sys.platform == "win32":
@@ -329,11 +332,11 @@ def _download_ffmpeg_sync() -> None:
 
     # generic names so third-party libs calling bare "ffmpeg" hit ours
     try:
-        (bin_dir / "ffmpeg").symlink_to(f"ffmpeg-{plat_tag}{ext}")
-        (bin_dir / "ffprobe").symlink_to(f"ffprobe-{plat_tag}{ext}")
+        (bin_dir / "ffmpeg").symlink_to(f"ffmpeg-{tag}{ext}")
+        (bin_dir / "ffprobe").symlink_to(f"ffprobe-{tag}{ext}")
     except (OSError, NotImplementedError):
-        shutil.copy2(bin_dir / f"ffmpeg-{plat_tag}{ext}", bin_dir / "ffmpeg")
-        shutil.copy2(bin_dir / f"ffprobe-{plat_tag}{ext}", bin_dir / "ffprobe")
+        shutil.copy2(bin_dir / f"ffmpeg-{tag}{ext}", bin_dir / "ffmpeg")
+        shutil.copy2(bin_dir / f"ffprobe-{tag}{ext}", bin_dir / "ffprobe")
     shutil.rmtree(tmp, ignore_errors=True)
     _set("ffmpeg", status="done", progress=1.0, detail="installed")
 
