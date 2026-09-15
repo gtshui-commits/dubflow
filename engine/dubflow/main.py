@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import string
+import sys
+from pathlib import Path
+from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from . import __version__
 from .asr import describe_backend
 from .config import settings
 from .downloads import downloads_snapshot, start_ffmpeg_download, start_model_download
 from .jobs import JobManager
-from .schemas import JobCreate
 from .schemas import JobCreate
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -153,6 +156,7 @@ class ExportOverrides(BaseModel):
     variant: Optional[str] = None
     save_to_video_folder: Optional[bool] = None
     embed_video: Optional[bool] = None
+    output_dir: Optional[str] = None
 
 
 @app.get("/jobs/{job_id}/audio")
@@ -185,6 +189,8 @@ async def reexport(job_id: str, body: ExportOverrides = None) -> dict:
         job.export_options["save_to_video_folder"] = body.save_to_video_folder
     if body.embed_video is not None:
         job.export_options["embed_video"] = body.embed_video
+    if body.output_dir is not None:
+        job.export_options["output_dir"] = body.output_dir
     manager.start_export(job)
     return {"ok": True, "job": job.out()}
 
@@ -212,6 +218,55 @@ async def delete_job(job_id: str) -> dict:
 @app.post("/jobs/clear-failed")
 async def clear_failed_jobs() -> dict:
     return {"ok": True, "removed": manager.clear_failed()}
+
+
+@app.get("/fs/dirs")
+async def list_dirs(path: str = "") -> dict:
+    """列出目录下的子目录，供 GUI 的「输出目录」选择器使用。
+
+    浏览器的安全策略不允许网页读取本地绝对路径，所以枚举能力放在引擎侧：
+    路径全部由服务端产生，前端只负责点选。引擎默认只监听 127.0.0.1。
+
+    path 留空时以用户主目录作为起点。
+    """
+    raw = (path or "").strip().strip('"')
+    if raw:
+        base = Path(raw).expanduser()
+        if not base.is_dir():
+            raise HTTPException(status_code=400, detail=f"不是有效目录: {raw}")
+    else:
+        base = Path.home()
+    base = base.resolve()
+
+    try:
+        children = sorted(base.iterdir(), key=lambda p: p.name.lower())
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"没有权限读取: {base}")
+
+    dirs = []
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        try:
+            if not child.is_dir():
+                continue
+            writable = os.access(child, os.W_OK)
+        except OSError:
+            continue
+        dirs.append({"name": child.name, "path": str(child), "writable": writable})
+
+    parent = base.parent if base.parent != base else None
+    drives = []
+    if sys.platform == "win32":
+        drives = [f"{c}:\\" for c in string.ascii_uppercase if Path(f"{c}:\\").exists()]
+
+    return {
+        "path": str(base),
+        "parent": str(parent) if parent else None,
+        "dirs": dirs,
+        "drives": drives,
+        "is_writable": os.access(base, os.W_OK),
+    }
 
 
 @app.get("/downloads")

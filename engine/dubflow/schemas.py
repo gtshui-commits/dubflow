@@ -21,8 +21,9 @@ class TranslationOptions(BaseModel):
 
 class ExportOptions(BaseModel):
     variant: str = "bilingual"      # source | target | bilingual  (三选一)
-    save_to_video_folder: bool = True   # 交付方式一：字幕存到原视频所在文件夹
+    save_to_video_folder: bool = True   # 交付方式一：字幕存到输出目录
     embed_video: bool = False           # 交付方式二：同时嵌入字幕生成新视频
+    output_dir: Optional[str] = None    # 输出目录；留空则用原视频所在目录
 
 
 class JobCreate(BaseModel):
