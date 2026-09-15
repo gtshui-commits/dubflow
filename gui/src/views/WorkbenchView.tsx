@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, EditableSegment, ENGINE_URL, Job } from "../api";
 import { STEP_LABELS } from "../labels";
+import DirPicker from "../components/DirPicker";
+import Tooltip from "../components/Tooltip";
 
 interface Props {
   jobId: string;
@@ -20,6 +22,8 @@ export default function WorkbenchView({ jobId, job, onBack }: Props) {
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const [reexportVariant, setReexportVariant] = useState("bilingual");
   const [reexportEmbed, setReexportEmbed] = useState(false);
+  const [reexportDir, setReexportDir] = useState("");
+  const [pickDir, setPickDir] = useState(false);
 
   const loadTranscript = useCallback(async () => {
     try {
@@ -119,11 +123,21 @@ export default function WorkbenchView({ jobId, job, onBack }: Props) {
         variant: reexportVariant,
         save_to_video_folder: true,
         embed_video: reexportEmbed,
+        output_dir: reexportDir.trim() || undefined,
       });
     } catch (e) {
       setLoadError(String(e));
     }
-  }, [jobId, reexportVariant, reexportEmbed]);
+  }, [jobId, reexportVariant, reexportEmbed, reexportDir]);
+
+  const stopJob = useCallback(async () => {
+    if (!window.confirm("确定停止该任务？已完成的步骤产物会保留。")) return;
+    try {
+      await api.cancelJob(jobId);
+    } catch (e) {
+      setLoadError(String(e));
+    }
+  }, [jobId]);
 
   const fileName = job ? job.video_path.split("/").pop() : jobId;
   const exportStep = job?.steps?.export;
@@ -132,43 +146,60 @@ export default function WorkbenchView({ jobId, job, onBack }: Props) {
     <>
       <div className="row" style={{ justifyContent: "space-between" }}>
         <div className="row">
-          <button style={{ padding: "4px 12px" }} onClick={onBack}>← 返回列表</button>
+          <Tooltip side="bottom" text="返回任务列表。表格里尚未保存的修改会丢失。">
+            <button style={{ padding: "4px 12px" }} onClick={onBack}>← 返回列表</button>
+          </Tooltip>
           <h2 style={{ margin: 0 }}>{fileName}</h2>
           <span className="muted">#{jobId}</span>
         </div>
-        {job && (
-          <div className="row">
-            {job.backend && "name" in job.backend && (
-              <span className="step">{job.backend.name}/{job.backend.device}</span>
-            )}
-          </div>
-        )}
+        <div className="row">
+          {job && (job.status === "running" || job.status === "queued") && (
+            <Tooltip
+              align="right"
+              side="bottom"
+              text="停止该任务。识别会在当前这段音频处理完后中断；已经完成的步骤产物都会保留。"
+            >
+              <button className="ghost" onClick={stopJob}>停止任务</button>
+            </Tooltip>
+          )}
+          {job?.backend && "name" in job.backend && (
+            <span className="step">{job.backend.name}/{job.backend.device}</span>
+          )}
+        </div>
       </div>
 
       <div className="panel" style={{ marginTop: 12 }}>
         <div className="row">
           <b>导出：</b>
-          <label className="muted">字幕类型</label>
-          <select value={reexportVariant} onChange={(e) => setReexportVariant(e.target.value)}>
-            <option value="bilingual">双语对照</option>
-            <option value="target">仅译文</option>
-            <option value="source">仅原文</option>
-          </select>
-          <label className="row" style={{ gap: 4 }}>
-            <input
-              type="checkbox"
-              style={{ width: "auto" }}
-              checked={reexportEmbed}
-              onChange={(e) => setReexportEmbed(e.target.checked)}
-            />
-            <span className="muted">烧录硬字幕视频</span>
-          </label>
-          <button
-            onClick={doReexport}
-            disabled={!editor || exportStep?.status === "running"}
-          >
-            重新导出
-          </button>
+          <Tooltip side="bottom" text="选择要导出的字幕形式：双语对照 / 仅译文 / 仅原文。">
+            <label className="muted">字幕类型</label>
+          </Tooltip>
+          <Tooltip side="bottom" text="双语对照 = 原文一行 + 译文一行；仅译文只保留翻译结果。">
+            <select value={reexportVariant} onChange={(e) => setReexportVariant(e.target.value)}>
+              <option value="bilingual">双语对照</option>
+              <option value="target">仅译文</option>
+              <option value="source">仅原文</option>
+            </select>
+          </Tooltip>
+          <Tooltip side="bottom" text="用 ffmpeg 把字幕烧进画面生成新视频。需要重新编码，比较耗时。">
+            <label className="row" style={{ gap: 4 }}>
+              <input
+                type="checkbox"
+                style={{ width: "auto" }}
+                checked={reexportEmbed}
+                onChange={(e) => setReexportEmbed(e.target.checked)}
+              />
+              <span className="muted">烧录硬字幕视频</span>
+            </label>
+          </Tooltip>
+          <Tooltip side="bottom" text="按表格里的当前内容重新生成字幕文件（以及可选的硬字幕视频）。改动请先点下方的「保存修改」。">
+            <button
+              onClick={doReexport}
+              disabled={!editor || exportStep?.status === "running"}
+            >
+              重新导出
+            </button>
+          </Tooltip>
           {exportStep && exportStep.status !== "pending" && (
             <span className={`step ${exportStep.status}`}>
               {STEP_LABELS.export}·{exportStep.status}
@@ -176,6 +207,25 @@ export default function WorkbenchView({ jobId, job, onBack }: Props) {
             </span>
           )}
           {exportStep?.detail && <span className="muted">{exportStep.detail}</span>}
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <Tooltip side="bottom" text="字幕文件和硬字幕视频的保存位置。留空则保存到原视频所在文件夹。">
+            <label className="muted">输出目录</label>
+          </Tooltip>
+          <input
+            type="text"
+            value={reexportDir}
+            placeholder="留空 = 原视频所在文件夹"
+            onChange={(e) => setReexportDir(e.target.value)}
+          />
+          <button className="ghost" onClick={() => setPickDir(true)}>
+            浏览…
+          </button>
+          {reexportDir && (
+            <button className="ghost" onClick={() => setReexportDir("")}>
+              恢复默认
+            </button>
+          )}
         </div>
       </div>
 
@@ -200,13 +250,14 @@ export default function WorkbenchView({ jobId, job, onBack }: Props) {
                 {editor.segments.map((s, i) => (
                   <tr key={i}>
                     <td>
-                      <button
-                        style={{ padding: "2px 8px" }}
-                        title="播放该句原声"
-                        onClick={() => togglePlay(i)}
-                      >
-                        {playingIndex === i ? "⏹" : "▶"}
-                      </button>
+                      <Tooltip side="bottom" text={playingIndex === i ? "停止播放" : "播放这一句对应的原声"}>
+                        <button
+                          style={{ padding: "2px 8px" }}
+                          onClick={() => togglePlay(i)}
+                        >
+                          {playingIndex === i ? "⏹" : "▶"}
+                        </button>
+                      </Tooltip>
                     </td>
                     <td>
                       <input
@@ -243,21 +294,37 @@ export default function WorkbenchView({ jobId, job, onBack }: Props) {
                       />
                     </td>
                     <td>
-                      <button style={{ padding: "2px 6px" }} title="拆分为两条" onClick={() => rowOp("split", i)}>拆</button>{" "}
-                      <button style={{ padding: "2px 6px" }} title="与下一条合并" onClick={() => rowOp("merge_next", i)}>并</button>{" "}
-                      <button style={{ padding: "2px 6px" }} title="删除此条" onClick={() => rowOp("delete", i)}>删</button>
+                      <Tooltip side="bottom" text="在这一句的中间位置切成两条字幕。">
+                        <button style={{ padding: "2px 6px" }} onClick={() => rowOp("split", i)}>拆</button>
+                      </Tooltip>{" "}
+                      <Tooltip side="bottom" text="把这一条与下一条合并成一条。">
+                        <button style={{ padding: "2px 6px" }} onClick={() => rowOp("merge_next", i)}>并</button>
+                      </Tooltip>{" "}
+                      <Tooltip align="right" side="bottom" text="删除这一条字幕。">
+                        <button style={{ padding: "2px 6px" }} onClick={() => rowOp("delete", i)}>删</button>
+                      </Tooltip>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div className="row" style={{ marginTop: 10 }}>
-              <button onClick={saveEdits}>保存修改</button>
+              <Tooltip side="bottom" text="把表格里的文本与时间轴改动写回任务。必须先保存，再点上方「重新导出」才会生效到字幕文件或视频。">
+                <button onClick={saveEdits}>保存修改</button>
+              </Tooltip>
               <span className="muted">修改后先保存，再点上方「重新导出」生效到字幕文件 / 视频。</span>
             </div>
           </>
         )}
       </div>
+
+      {pickDir && (
+        <DirPicker
+          value={reexportDir || undefined}
+          onPick={setReexportDir}
+          onClose={() => setPickDir(false)}
+        />
+      )}
     </>
   );
 }

@@ -39,7 +39,7 @@ export default function App() {
       </p>
 
       {view.name === "home" ? (
-        <HomeView jobs={jobs} onOpenJob={openJob} />
+        <HomeView jobs={jobs} onOpenJob={openJob} health={health} />
       ) : (
         <WorkbenchView
           jobId={view.jobId}
