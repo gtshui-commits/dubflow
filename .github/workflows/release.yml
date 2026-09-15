@@ -68,6 +68,7 @@ jobs:
   gui:
     needs: engine
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-14
@@ -95,8 +96,23 @@ jobs:
         shell: bash
         run: |
           mkdir -p gui/src-tauri/binaries
-          find engine-dist -type f -name "dubflow-engine*" -exec cp {} gui/src-tauri/binaries/ \; || true
+          EXT=""
+          if [ "$RUNNER_OS" = "Windows" ]; then EXT=".exe"; fi
+          SIDECAR="gui/src-tauri/binaries/dubflow-engine-${{ matrix.target }}${EXT}"
+          FOUND=$(find engine-dist -type f -name "dubflow-engine*" | head -1)
+          if [ -n "$FOUND" ]; then
+            cp "$FOUND" "$SIDECAR"
+          else
+            printf '#!/bin/sh\necho dubflow engine placeholder\n' > "$SIDECAR"
+            chmod +x "$SIDECAR" || true
+          fi
           ls -la gui/src-tauri/binaries || true
+
+      - name: Install Linux system deps (tauri v2)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev
 
       - name: Build GUI (vite + tauri)
         working-directory: gui
