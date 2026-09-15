@@ -63,6 +63,20 @@ export interface EditableSegment {
   text: string;
 }
 
+export interface DirEntry {
+  name: string;
+  path: string;
+  writable: boolean;
+}
+
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  dirs: DirEntry[];
+  drives: string[];
+  is_writable: boolean;
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(ENGINE_URL + path, {
     method,
@@ -97,6 +111,7 @@ export const api = {
       variant: string;
       save_to_video_folder: boolean;
       embed_video: boolean;
+      output_dir?: string | null;
     };
     }) => req<Job>("POST", "/jobs", payload),
   getTranscript: (id: string) =>
@@ -123,8 +138,12 @@ export const api = {
       variant?: string;
       save_to_video_folder?: boolean;
       embed_video?: boolean;
+      output_dir?: string;
     }
   ) => req<{ ok: boolean }>("POST", `/jobs/${id}/export`, overrides),
+  cancelJob: (id: string) => req<{ ok: boolean }>("POST", `/jobs/${id}/cancel`),
+  listDirs: (path?: string) =>
+    req<DirListing>("GET", `/fs/dirs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   downloads: () => req<DownloadsSnapshot>("GET", "/downloads"),
   downloadModel: (key: string) =>
     req<{ ok: boolean }>("POST", `/downloads/models/${key}`),

@@ -74,3 +74,54 @@ table input[type="number"]:focus {
   border-color: var(--accent);
   background: var(--bg);
 }
+
+/* --- 悬停提示：纯 CSS 定位，鼠标悬停与键盘聚焦都触发 --- */
+.tip-wrap { position: relative; display: inline-flex; align-items: center; }
+.tip-wrap.grow { flex: 1; display: flex; }
+.tip-bubble {
+  position: absolute; z-index: 50;
+  width: max-content; max-width: 300px;
+  padding: 6px 10px; border-radius: 6px;
+  font-size: 12px; line-height: 1.55; font-weight: 400;
+  text-align: left; white-space: normal;
+  background: #2a2f38; color: var(--text);
+  border: 1px solid #3b4149;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .5);
+  pointer-events: none;
+}
+.tip-top { bottom: calc(100% + 7px); }
+.tip-bottom { top: calc(100% + 7px); }
+.tip-align-center { left: 50%; transform: translateX(-50%); }
+.tip-align-right { right: 0; }
+
+/* --- 次级 / 危险 / 小尺寸按钮 --- */
+button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+button.ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button.danger { background: var(--err); }
+button.sm { padding: 3px 10px; font-size: 12px; }
+
+/* --- 目录选择弹窗 --- */
+.modal-mask {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, .62);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  width: min(620px, 92vw); max-height: 84vh;
+  display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px;
+}
+.modal h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+.dirlist {
+  margin-top: 10px; overflow-y: auto; max-height: 46vh;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.dirrow {
+  display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  padding: 7px 12px; cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.dirrow:last-child { border-bottom: 0; }
+.dirrow:hover { background: rgba(79, 140, 255, .12); }
+.diritem { word-break: break-all; }

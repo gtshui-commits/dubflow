@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, Optional
 
 
 def _env(key: str, default: str = "") -> str:
@@ -50,3 +51,36 @@ os.environ["PATH"] = f"{_BIN_DIR}{os.pathsep}" + os.environ.get("PATH", "")
 # huggingface_hub reads this at import time; keep CN-friendly default,
 # override with HF_ENDPOINT=https://huggingface.co if you prefer.
 os.environ.setdefault("HF_ENDPOINT", settings.hf_endpoint)
+
+
+# ---------------------------------------------------------------------------
+# 本地模型目录解析
+#
+# 下载器（downloads.CATALOG）落盘用的是它自己的键名，例如 "faster-whisper-base"；
+# 而引擎在识别时收到的是 GUI 传来的别名，例如 "base"。两者对不上会导致
+# 「模型明明下载好了，引擎却当本地不存在，转而去 HF 重下一遍」。
+# 这里统一解析，三种命名都认：别名 / 下载器键名 / 带前缀的仓库短名。
+# ---------------------------------------------------------------------------
+_MODEL_DIR_ALIASES: Dict[str, str] = {
+    "tiny": "faster-whisper-tiny",
+    "base": "faster-whisper-base",
+    "small": "faster-whisper-small",
+    "medium": "faster-whisper-medium",
+    "large-v3": "faster-whisper-large-v3",
+    "large-v3-turbo": "faster-whisper-large-v3-turbo",
+    "turbo": "faster-whisper-large-v3-turbo",
+}
+
+
+def resolve_model_dir(model_size: str) -> Optional[Path]:
+    """返回本地已就绪的模型目录（要求内含 model.bin），没有则返回 None。"""
+    names = [model_size]
+    alias = _MODEL_DIR_ALIASES.get(model_size)
+    if alias:
+        names.append(alias)
+    names.append(f"faster-whisper-{model_size}")
+    for name in dict.fromkeys(names):
+        candidate = settings.models_dir / name
+        if (candidate / "model.bin").is_file():
+            return candidate
+    return None

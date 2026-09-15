@@ -23,6 +23,14 @@ log = logging.getLogger(__name__)
 STEPS = ["probe", "extract_audio", "asr", "translate", "export"]
 
 
+class _Cancelled(Exception):
+    """工作线程内的取消信号。
+
+    asyncio.CancelledError 不能跨线程抛出，所以线程侧统一用这个异常，
+    回到事件循环后再翻译成 CancelledError。
+    """
+
+
 @dataclass
 class Step:
     status: str = "pending"   # pending | running | done | failed | skipped
@@ -174,6 +182,16 @@ class JobManager:
         if job.cancel_requested:
             raise asyncio.CancelledError
 
+    @staticmethod
+    def _raise_if_cancelled(job: Job) -> None:
+        """供工作线程（ASR / 翻译）调用，让「停止」能及时生效。
+
+        ASR 与翻译跑在线程里，事件循环的取消信号传不进去，只能靠它们自己的
+        进度回调主动检查；否则点了停止也要等整段推理跑完才会响应。
+        """
+        if job.cancel_requested:
+            raise _Cancelled()
+
     async def _run(self, job: Job) -> None:
         loop = asyncio.get_running_loop()
         job.status = "running"
@@ -206,15 +224,19 @@ class JobManager:
             self.hub.publish(job.id, self._snap(job))
 
             def asr_progress(p: float, detail: str) -> None:
+                self._raise_if_cancelled(job)      # 段间响应「停止」
                 job.steps["asr"].progress = p
                 job.steps["asr"].detail = detail
                 self._pub_threadsafe(loop, job)
 
             self._check_cancel(job)
-            transcript = await asyncio.to_thread(
-                provider.transcribe, str(wav_path),
-                job.source_language, job.asr_options.get("model"), asr_progress,
-            )
+            try:
+                transcript = await asyncio.to_thread(
+                    provider.transcribe, str(wav_path),
+                    job.source_language, job.asr_options.get("model"), asr_progress,
+                )
+            except _Cancelled:
+                raise asyncio.CancelledError
             job.transcript = transcript
             tpath = job_dir / "transcript.json"
             tpath.write_text(json.dumps(transcript.to_dict(), ensure_ascii=False, indent=2))
@@ -234,11 +256,16 @@ class JobManager:
                 )
 
                 def tr_progress(p: float, detail: str) -> None:
+                    self._raise_if_cancelled(job)      # 批次间响应「停止」
                     job.steps["translate"].progress = p
                     job.steps["translate"].detail = detail
                     self._pub_threadsafe(loop, job)
 
-                texts = await asyncio.to_thread(translator.translate_transcript, transcript, tr_progress)
+                try:
+                    texts = await asyncio.to_thread(
+                        translator.translate_transcript, transcript, tr_progress)
+                except _Cancelled:
+                    raise asyncio.CancelledError
                 job.translations = texts
                 await self._set_step(job, loop, "translate", "done")
             else:
@@ -292,7 +319,14 @@ class JobManager:
         embed = e_opts.get("embed_video", False)
         detail = ""
         if save or embed:
-            video_dir = Path(job.video_path).parent
+            # 交付目录：用户指定优先，未指定则落到原视频所在目录
+            custom_dir = (e_opts.get("output_dir") or "").strip().strip('"')
+            if custom_dir:
+                video_dir = Path(custom_dir).expanduser()
+                if not video_dir.is_dir():
+                    raise ValueError(f"输出目录不存在或不可用: {video_dir}")
+            else:
+                video_dir = Path(job.video_path).parent
             stem = Path(job.video_path).stem
             src_lang = transcript.language or job.source_language or "src"
             names = {"source": f"{stem}.{src_lang}.srt",
@@ -308,6 +342,7 @@ class JobManager:
                 duration = wav_duration(job_dir / "audio.wav")
 
                 def burn_progress(pr: float, d: str) -> None:
+                    self._check_cancel(job)   # 烧录过程也响应「停止」
                     job.steps["export"].progress = pr
                     job.steps["export"].detail = d
                     self._pub_threadsafe(loop, job)
